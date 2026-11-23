@@ -31,6 +31,18 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        {/*
+          Bootstrap: start the library fetch during HTML parsing, long before
+          React hydrates. TubeApp awaits this promise instead of launching a
+          fresh request, so the 1.6 MB payload downloads in parallel with the
+          JS chunks instead of after them. ?v=2 busts the pre-flag cache entry.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.__chadtubeData=fetch('/api/videos?v=2').then(function(r){if(!r.ok)throw new Error('bad response');return r.json()});",
+          }}
+        />
         <Providers>{children}</Providers>
         <Toaster />
       </body>

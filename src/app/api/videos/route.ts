@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import path from "path";
 
 /**
@@ -11,19 +11,27 @@ import path from "path";
  * disk instead gives a ~3x smaller transfer, instant 304 revalidation, and
  * fast route compilation.
  *
+ * `no-cache` + ETag: the browser revalidates on every visit (a 0-byte 304
+ * when nothing changed), so data updates — like new Pakistani-mode flags —
+ * reach users on their next normal reload instead of 24 hours later.
+ *
  * Regenerate the .gz after changing videos.json:  bash scripts/compress_data.sh
  */
 
-const CACHE = "public, max-age=86400, must-revalidate";
+const CACHE = "public, no-cache";
 const GZ_PATH = path.join(process.cwd(), "src/data/videos.json.gz");
 const RAW_PATH = path.join(process.cwd(), "src/data/videos.json");
 
 let gzBuf: Buffer | null = null;
 let rawBuf: Buffer | null = null;
 let etag = "";
+let loadedMtimeMs = 0;
 
 async function load(): Promise<void> {
-  if (rawBuf) return;
+  // A stat() per request is ~free and lets the running server pick up data
+  // file changes (e.g. re-running scripts/mark_pakistani.py) without a restart.
+  const m = await stat(RAW_PATH);
+  if (rawBuf && m.mtimeMs === loadedMtimeMs) return;
   rawBuf = await readFile(RAW_PATH);
   etag = `"${createHash("md5").update(rawBuf).digest("hex")}"`;
   try {
@@ -31,6 +39,7 @@ async function load(): Promise<void> {
   } catch {
     gzBuf = null; // fall back to plain JSON if the .gz hasn't been generated
   }
+  loadedMtimeMs = m.mtimeMs;
 }
 
 export async function GET(req: Request) {
@@ -47,7 +56,7 @@ export async function GET(req: Request) {
     Vary: "Accept-Encoding",
   };
 
-  // Client cache is still valid -> no body at all.
+  // Client copy unchanged -> no body at all.
   if (req.headers.get("if-none-match") === etag) {
     return new Response(null, { status: 304, headers: base });
   }

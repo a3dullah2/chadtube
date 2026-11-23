@@ -1,0 +1,762 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+     4→     4→import {
+     5→     5→  Dices,
+     6→     6→  History,
+     7→     7→  Home,
+     8→     8→  Menu,
+     9→     9→  Moon,
+    10→    10→  Search,
+    11→    11→  Sun,
+    12→    12→  Tv,
+    13→    13→  X,
+    14→    14→} from "lucide-react";
+    15→    15→import { useTheme } from "next-themes";
+    16→    16→import { Badge } from "@/components/ui/badge";
+    17→    17→import { Button } from "@/components/ui/button";
+    18→    18→import { Input } from "@/components/ui/input";
+    19→    19→import {
+    20→    20→  Select,
+    21→    21→  SelectContent,
+    22→    22→  SelectItem,
+    23→    23→  SelectTrigger,
+    24→    24→  SelectValue,
+    25→    25→} from "@/components/ui/select";
+    26→    26→import { Separator } from "@/components/ui/separator";
+    27→    27→import { Skeleton } from "@/components/ui/skeleton";
+    28→    28→import { useToast } from "@/hooks/use-toast";
+    29→    29→import { TvMode } from "./tv-mode";
+    30→    30→import { WatchView } from "./watch-view";
+    31→    31→import type { Chan, HistEntry, SortMode, Tier, TubeData, Vid } from "./types";
+    32→    32→import {
+    33→    33→  chanName,
+    34→    34→  fmtAge,
+    35→    35→  fmtDur,
+    36→    36→  fmtTimeAgo,
+    37→    37→  fmtViews,
+    38→    38→  interleaveChannels,
+    39→    39→  metaJoin,
+    40→    40→  shuffleSeeded,
+    41→    41→  TIER_COLORS,
+    42→    42→  TIER_LABELS,
+    43→    43→  thumbUrl,
+    44→    44→} from "./utils";
+    45→    45→
+    46→    46→const TIERS: Tier[] = ["S", "A", "B", "C", "D", "R", "★"];
+    47→    47→const PAGE = 40;
+    48→    48→
+    49→    49→type View = "home" | "watch" | "history";
+    50→    50→
+    51→    51→export function TubeApp() {
+    52→    52→  const [data, setData] = useState<TubeData | null>(null);
+    53→    53→  const [loadError, setLoadError] = useState(false);
+    54→    54→  const [view, setView] = useState<View>("home");
+    55→    55→  const [current, setCurrent] = useState<Vid | null>(null);
+    56→    56→  const [queue, setQueue] = useState<Vid[]>([]);
+    57→    57→  const [q, setQ] = useState("");
+    58→    58→  // Heavy filtering/sorting over 30k videos is deferred so typing stays snappy.
+    59→    59→  const dq = useDeferredValue(q);
+    60→    60→  const [tier, setTier] = useState<"all" | Tier>("all");
+    61→    61→  const [chan, setChan] = useState<number | null>(null);
+    62→    62→  const [sort, setSort] = useState<SortMode>("newest");
+    63→    63→  const [seed, setSeed] = useState(1);
+    64→    64→  // Pakistani mode: hide Pakistani news & Islamic channels (Dunya News, the
+    65→    65→  // Ghamidi circle, SAMAA/Geo reposts, ...) from feed, search and TV queue.
+    66→    66→  const [pkMode, setPkMode] = useState(false);
+    67→    67→  const [visible, setVisible] = useState(PAGE);
+    68→    68→  const [drawer, setDrawer] = useState(false);
+    69→    69→  const [tv, setTv] = useState(false);
+    70→    70→  const [tvQueue, setTvQueue] = useState<Vid[]>([]);
+    71→    71→  const [tvStart, setTvStart] = useState(0);
+    72→    72→  const [hist, setHist] = useState<HistEntry[]>([]);
+    73→    73→  const [autoplay, setAutoplay] = useState(true);
+    74→    74→  const [mounted, setMounted] = useState(false);
+    75→    75→  const { theme, setTheme } = useTheme();
+    76→    76→  const { toast } = useToast();
+    77→    77→
+    78→    78→  // Data + persisted prefs (async: never setState synchronously inside the effect)
+    79→    79→  useEffect(() => {
+    80→    80→    let alive = true;
+    81→    81→    (async () => {
+    82→    82→      await Promise.resolve();
+    83→    83→      if (!alive) return;
+    84→    84→      try {
+    85→    85→        const h = localStorage.getItem("mytube.hist");
+    86→    86→        if (h) setHist(JSON.parse(h));
+    87→    87→        const a = localStorage.getItem("mytube.autoplay");
+    88→    88→        if (a !== null) setAutoplay(a === "1");
+    89→    89→        if (localStorage.getItem("chadtube.pk") === "1") setPkMode(true);
+    90→    90→      } catch {
+    91→    91→        /* noop */
+    92→    92→      }
+    93→    93→      setMounted(true);
+    94→    94→      try {
+    95→    95→        const r = await fetch("/api/videos");
+    96→    96→        if (!r.ok) throw new Error("bad response");
+    97→    97→        const d = (await r.json()) as TubeData;
+    98→    98→        if (alive) setData(d);
+    99→    99→      } catch {
+   100→   100→        if (alive) setLoadError(true);
+   101→   101→      }
+   102→   102→    })();
+   103→   103→    return () => {
+   104→   104→      alive = false;
+   105→   105→    };
+   106→   106→  }, []);
+   107→   107→
+   108→   108→  const pushHist = useCallback((id: string) => {
+   109→   109→    setHist((prev) => {
+   110→   110→      const next = [{ id, ts: Date.now() }, ...prev.filter((h) => h.id !== id)].slice(0, 300);
+   111→   111→      try {
+   112→   112→        localStorage.setItem("mytube.hist", JSON.stringify(next));
+   113→   113→      } catch {
+   114→   114→        /* noop */
+   115→   115→      }
+   116→   116→      return next;
+   117→   117→    });
+   118→   118→  }, []);
+   119→   119→
+   120→   120→  const clearHist = useCallback(() => {
+   121→   121→    setHist([]);
+   122→   122→    try {
+   123→   123→      localStorage.removeItem("mytube.hist");
+   124→   124→    } catch {
+   125→   125→      /* noop */
+   126→   126→    }
+   127→   127→    toast({ title: "Watch history cleared" });
+   128→   128→  }, [toast]);
+   129→   129→
+   130→   130→  const changeAutoplay = useCallback((v: boolean) => {
+   131→   131→    setAutoplay(v);
+   132→   132→    try {
+   133→   133→      localStorage.setItem("mytube.autoplay", v ? "1" : "0");
+   134→   134→    } catch {
+   135→   135→      /* noop */
+   136→   136→    }
+   137→   137→  }, []);
+   138→   138→
+   139→   139→  const channels = data?.channels ?? [];
+   140→   140→
+   141→   141→  const filtered = useMemo(() => {
+   142→   142→    if (!data) return [];
+   143→   143→    const ql = dq.trim().toLowerCase();
+   144→   144→    let out = data.videos.filter((v) => {
+   145→   145→      if (tier !== "all" && (data.channels[v.c]?.tier as Tier) !== tier) return false;
+   146→   146→      if (chan !== null && v.c !== chan) return false;
+   147→   147→      if (pkMode && (data.channels[v.c]?.pk || v.pk)) return false;
+   148→   148→      if (ql) {
+   149→   149→        const t = v.t.toLowerCase();
+   150→   150→        const c = `${data.channels[v.c]?.n ?? ""} ${v.up ?? ""}`.toLowerCase();
+   151→   151→        if (!t.includes(ql) && !c.includes(ql)) return false;
+   152→   152→      }
+   153→   153→      return true;
+   154→   154→    });
+   155→   155→    // Feed-level dedupe: same video via its channel AND the playlist keeps the
+   156→   156→    // channel copy in the mixed feed (the ★ filter still shows the full playlist).
+   157→   157→    const seen = new Set<string>();
+   158→   158→    out = out.filter((v) => !seen.has(v.id) && seen.add(v.id));
+   159→   159→    if (sort === "newest") {
+   160→   160→      // Healthy feed: newest-first inside each channel, then round-robin
+   161→   161→      // across channels so firehose channels (news, music dumps) can't
+   162→   162→      // cluster at the top. Single-channel filters degenerate to identity.
+   163→   163→      out = interleaveChannels(
+   164→   164→        [...out].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v)
+   165→   165→      );
+   166→   166→    } else if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
+   167→   167→    else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
+   168→   168→    else if (sort === "shuffle") out = shuffleSeeded(out, seed);
+   169→   169→    return out;
+   170→   170→  }, [data, dq, tier, chan, sort, seed, pkMode]);
+   171→   171→
+   172→   172→  const applyFilter = useCallback(() => {
+   173→   173→    setVisible(PAGE);
+   174→   174→    // Typing in search or changing filters should return to the grid
+   175→   175→    setView("home");
+   176→   176→  }, []);
+   177→   177→
+   178→   178→  const openFromGrid = useCallback(
+   179→   179→    (v: Vid, list: Vid[]) => {
+   180→   180→      setQueue(list);
+   181→   181→      setCurrent(v);
+   182→   182→      setView("watch");
+   183→   183→      pushHist(v.id);
+   184→   184→      window.scrollTo({ top: 0 });
+   185→   185→    },
+   186→   186→    [pushHist]
+   187→   187→  );
+   188→   188→
+   189→   189→  const openInQueue = useCallback(
+   190→   190→    (v: Vid) => {
+   191→   191→      setCurrent(v);
+   192→   192→      pushHist(v.id);
+   193→   193→      window.scrollTo({ top: 0 });
+   194→   194→    },
+   195→   195→    [pushHist]
+   196→   196→  );
+   197→   197→
+   198→   198→  const togglePk = useCallback(() => {
+   199→   199→    const next = !pkMode;
+   200→   200→    setPkMode(next);
+   201→   201→    try {
+   202→   202→      localStorage.setItem("chadtube.pk", next ? "1" : "0");
+   203→   203→    } catch {
+   204→   204→      /* noop */
+   205→   205→    }
+   206→   206→    applyFilter();
+   207→   207→    toast({
+   208→   208→      title: next ? "Pakistani mode on" : "Pakistani mode off",
+   209→   209→      description: next
+   210→   210→        ? "Pakistani news & Islamic channels are hidden"
+   211→   211→        : "Pakistani channels are back in the feed",
+   212→   212→    });
+   213→   213→  }, [pkMode, applyFilter, toast]);
+   214→   214→
+   215→   215→  const reshuffle = useCallback(() => {
+   216→   216→    setSort("shuffle");
+   217→   217→    setSeed(Math.floor(Math.random() * 1e9));
+   218→   218→    setVisible(PAGE);
+   219→   219→    toast({
+   220→   220→      title: "Shuffled",
+   221→   221→      description: `${filtered.length.toLocaleString()} videos in a brand-new order`,
+   222→   222→    });
+   223→   223→  }, [filtered.length, toast]);
+   224→   224→
+   225→   225→  const openTv = useCallback(
+   226→   226→    (startIdx?: number) => {
+   227→   227→      const list = view === "watch" && queue.length ? queue : filtered;
+   228→   228→      if (!list.length) {
+   229→   229→        toast({ title: "Nothing to play", description: "No videos match the current filters." });
+   230→   230→        return;
+   231→   231→      }
+   232→   232→      setTvQueue(list);
+   233→   233→      setTvStart(
+   234→   234→        startIdx !== undefined && startIdx >= 0
+   235→   235→          ? startIdx
+   236→   236→          : Math.floor(Math.random() * list.length)
+   237→   237→      );
+   238→   238→      setTv(true);
+   239→   239→    },
+   240→   240→    [view, queue, filtered, toast]
+   241→   241→  );
+   242→   242→
+   243→   243→  const goHome = useCallback(() => {
+   244→   244→    setView("home");
+   245→   245→    setDrawer(false);
+   246→   246→  }, []);
+   247→   247→
+   248→   248→  const toggleTheme = useCallback(() => {
+   249→   249→    setTheme(theme === "dark" ? "light" : "dark");
+   250→   250→  }, [theme, setTheme]);
+   251→   251→
+   252→   252→  const histVids = useMemo(() => {
+   253→   253→    if (!data) return [];
+   254→   254→    return hist
+   255→   255→      .map((h) => ({ h, v: data.videos.find((x) => x.id === h.id) }))
+   256→   256→      .filter((x): x is { h: HistEntry; v: Vid } => !!x.v)
+   257→   257→      .map((x) => ({ entry: x.h, vid: x.v }));
+   258→   258→  }, [data, hist]);
+   259→   259→
+   260→   260→  const navItem = (
+   261→   261→    icon: React.ReactNode,
+   262→   262→    label: string,
+   263→   263→    active: boolean,
+   264→   264→    onClick: () => void
+   265→   265→  ) => (
+   266→   266→    <button
+   267→   267→      onClick={onClick}
+   268→   268→      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium hover:bg-accent ${
+   269→   269→        active ? "bg-accent" : ""
+   270→   270→      }`}
+   271→   271→    >
+   272→   272→      {icon}
+   273→   273→      {label}
+   274→   274→    </button>
+   275→   275→  );
+   276→   276→
+   277→   277→  const sidebarContent = (onNavigate?: () => void) => (
+   278→   278→    <div className="flex h-full flex-col">
+   279→   279→      <div className="p-3">
+   280→   280→        {navItem(<Home className="h-4 w-4" />, "Home", view === "home", () => {
+   281→   281→          setTier("all");
+   282→   282→          setChan(null);
+   283→   283→          applyFilter();
+   284→   284→          goHome();
+   285→   285→          onNavigate?.();
+   286→   286→        })}
+   287→   287→        {navItem(<Tv className="h-4 w-4" />, "TV mode", false, () => {
+   288→   288→          openTv();
+   289→   289→          onNavigate?.();
+   290→   290→        })}
+   291→   291→        {navItem(<History className="h-4 w-4" />, "History", view === "history", () => {
+   292→   292→          setView("history");
+   293→   293→          setDrawer(false);
+   294→   294→          onNavigate?.();
+   295→   295→        })}
+   296→   296→      </div>
+   297→   297→      <Separator />
+   298→   298→      <div className="flex-1 overflow-y-auto p-3">
+   299→   299→        {data ? (
+   300→   300→          <>
+   301→   301→            <p className="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   302→   302→              {channels.length} curated channels
+   303→   303→            </p>
+   304→   304→            <button
+   305→   305→              onClick={() => {
+   306→   306→                setChan(null);
+   307→   307→                applyFilter();
+   308→   308→                setView("home");
+   309→   309→                onNavigate?.();
+   310→   310→              }}
+   311→   311→              className={`mt-1 flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-sm hover:bg-accent ${
+   312→   312→                chan === null ? "bg-accent font-medium" : ""
+   313→   313→              }`}
+   314→   314→            >
+   315→   315→              All channels
+   316→   316→            </button>
+   317→   317→            {TIERS.map((t) => {
+   318→   318→              const list = channels
+   319→   319→                .map((c, i) => ({ c, i }))
+   320→   320→                .filter((x) => x.c.tier === t);
+   321→   321→              if (!list.length) return null;
+   322→   322→              return (
+   323→   323→                <div key={t} className="mt-3">
+   324→   324→                  <p className="flex items-center gap-2 px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+   325→   325→                    <span
+   326→   326→                      className="inline-block h-2 w-2 rounded-full"
+   327→   327→                      style={{ backgroundColor: TIER_COLORS[t] }}
+   328→   328→                    />
+   329→   329→                    {t} — {TIER_LABELS[t]}
+   330→   330→                  </p>
+   331→   331→                  {list.map(({ c, i }) => (
+   332→   332→                    <button
+   333→   333→                      key={c.cid}
+   334→   334→                      onClick={() => {
+   335→   335→                        setChan(i);
+   336→   336→                        applyFilter();
+   337→   337→                        setView("home");
+   338→   338→                        onNavigate?.();
+   339→   339→                      }}
+   340→   340→                      className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm hover:bg-accent ${
+   341→   341→                        chan === i ? "bg-accent font-medium" : ""
+   342→   342→                      }`}
+   343→   343→                    >
+   344→   344→                      <span className="truncate">{c.n}</span>
+   345→   345→                      <span className="shrink-0 text-xs text-muted-foreground">
+   346→   346→                        {c.count}
+   347→   347→                      </span>
+   348→   348→                    </button>
+   349→   349→                  ))}
+   350→   350→                </div>
+   351→   351→              );
+   352→   352→            })}
+   353→   353→          </>
+   354→   354→        ) : (
+   355→   355→          <div className="space-y-2 p-2">
+   356→   356→            {Array.from({ length: 8 }).map((_, i) => (
+   357→   357→              <Skeleton key={i} className="h-6 w-full" />
+   358→   358→            ))}
+   359→   359→          </div>
+   360→   360→        )}
+   361→   361→      </div>
+   362→   362→    </div>
+   363→   363→  );
+   364→   364→
+   365→   365→  const chip = (t: "all" | Tier) => {
+   366→   366→    const active = tier === t;
+   367→   367→    return (
+   368→   368→      <button
+   369→   369→        key={t}
+   370→   370→        onClick={() => {
+   371→   371→          setTier(t);
+   372→   372→          applyFilter();
+   373→   373→        }}
+   374→   374→        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+   375→   375→          active
+   376→   376→            ? "border-transparent bg-foreground text-background"
+   377→   377→            : "bg-secondary text-secondary-foreground hover:bg-accent"
+   378→   378→        }`}
+   379→   379→        aria-pressed={active}
+   380→   380→      >
+   381→   381→        {t !== "all" && (
+   382→   382→          <span
+   383→   383→            className="inline-block h-2 w-2 rounded-full"
+   384→   384→            style={{ backgroundColor: TIER_COLORS[t] }}
+   385→   385→          />
+   386→   386→        )}
+   387→   387→        {t === "all" ? "All" : t}
+   388→   388→      </button>
+   389→   389→    );
+   390→   390→  };
+   391→   391→
+   392→   392→  return (
+   393→   393→    <div className="flex min-h-screen flex-col">
+   394→   394→      {/* Header */}
+   395→   395→      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+   396→   396→        <div className="flex h-14 items-center gap-2 px-3 sm:px-4">
+   397→   397→          <Button
+   398→   398→            variant="ghost"
+   399→   399→            size="icon"
+   400→   400→            className="md:hidden"
+   401→   401→            onClick={() => setDrawer(true)}
+   402→   402→            aria-label="Open menu"
+   403→   403→          >
+   404→   404→            <Menu className="h-5 w-5" />
+   405→   405→          </Button>
+   406→   406→          <button
+   407→   407→            className="flex items-center gap-2"
+   408→   408→            onClick={goHome}
+   409→   409→            aria-label="ChadTube home"
+   410→   410→          >
+   411→   411→            <img
+   412→   412→              src="/chad.png"
+   413→   413→              alt="ChadTube logo"
+   414→   414→              width={36}
+   415→   415→              height={36}
+   416→   416→              draggable={false}
+   417→   417→              className="chad-logo h-9 w-auto select-none"
+   418→   418→            />
+   419→   419→            <span className="text-lg font-bold tracking-tight">ChadTube</span>
+   420→   420→          </button>
+   421→   421→          <div className="relative mx-auto hidden max-w-xl flex-1 sm:block">
+   422→   422→            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   423→   423→            <Input
+   424→   424→              value={q}
+   425→   425→              onChange={(e) => {
+   426→   426→                setQ(e.target.value);
+   427→   427→                applyFilter();
+   428→   428→              }}
+   429→   429→              placeholder="Search videos and channels…"
+   430→   430→              className="rounded-full border-0 bg-secondary pl-9"
+   431→   431→              aria-label="Search"
+   432→   432→            />
+   433→   433→          </div>
+   434→   434→          <div className="flex-1 sm:hidden" />
+   435→   435→          <div className="flex items-center gap-1">
+   436→   436→            <Button
+   437→   437→              variant="ghost"
+   438→   438→              size="icon"
+   439→   439→              onClick={reshuffle}
+   440→   440→              aria-label="Shuffle everything"
+   441→   441→            >
+   442→   442→              <Dices className="h-5 w-5" />
+   443→   443→            </Button>
+   444→   444→            <Button
+   445→   445→              variant="ghost"
+   446→   446→              size="icon"
+   447→   447→              className="hidden sm:inline-flex"
+   448→   448→              onClick={() => setView("history")}
+   449→   449→              aria-label="Watch history"
+   450→   450→            >
+   451→   451→              <History className="h-5 w-5" />
+   452→   452→            </Button>
+   453→   453→            <Button
+   454→   454→              size="sm"
+   455→   455→              onClick={() => openTv()}
+   456→   456→              className="hidden gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41] sm:inline-flex"
+   457→   457→            >
+   458→   458→              <Tv className="h-4 w-4" /> TV mode
+   459→   459→            </Button>
+   460→   460→            <Button
+   461→   461→              variant="ghost"
+   462→   462→              size="icon"
+   463→   463→              className="sm:hidden"
+   464→   464→              onClick={() => openTv()}
+   465→   465→              aria-label="TV mode"
+   466→   466→            >
+   467→   467→              <Tv className="h-5 w-5" />
+   468→   468→            </Button>
+   469→   469→            <Button
+   470→   470→              variant="ghost"
+   471→   471→              size="icon"
+   472→   472→              onClick={togglePk}
+   473→   473→              aria-label="Pakistani mode"
+   474→   474→              aria-pressed={pkMode}
+   475→   475→              title="Pakistani mode: hide Pakistani news & Islamic channels"
+   476→   476→              className={pkMode ? "bg-foreground text-background hover:bg-foreground/90" : ""}
+   477→   477→            >
+   478→   478→              <span className="text-base leading-none">🇵🇰</span>
+   479→   479→            </Button>
+   480→   480→            <Button
+   481→   481→              variant="ghost"
+   482→   482→              size="icon"
+   483→   483→              onClick={toggleTheme}
+   484→   484→              aria-label="Toggle theme"
+   485→   485→            >
+   486→   486→              {mounted && theme === "dark" ? (
+   487→   487→                <Sun className="h-5 w-5" />
+   488→   488→              ) : (
+   489→   489→                <Moon className="h-5 w-5" />
+   490→   490→              )}
+   491→   491→            </Button>
+   492→   492→          </div>
+   493→   493→        </div>
+   494→   494→        <div className="px-3 pb-2 sm:hidden">
+   495→   495→          <div className="relative">
+   496→   496→            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+   497→   497→            <Input
+   498→   498→              value={q}
+   499→   499→              onChange={(e) => {
+   500→   500→                setQ(e.target.value);
+   501→   501→                applyFilter();
+   502→   502→              }}
+   503→   503→              placeholder="Search…"
+   504→   504→              className="rounded-full border-0 bg-secondary pl-9"
+   505→   505→              aria-label="Search"
+   506→   506→            />
+   507→   507→          </div>
+   508→   508→        </div>
+   509→   509→      </header>
+   510→   510→
+   511→   511→      <div className="flex flex-1">
+   512→   512→        {/* Desktop sidebar */}
+   513→   513→        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r md:block">
+   514→   514→          {sidebarContent()}
+   515→   515→        </aside>
+   516→   516→
+   517→   517→        {/* Mobile drawer */}
+   518→   518→        {drawer && (
+   519→   519→          <div className="fixed inset-0 z-[60] md:hidden">
+   520→   520→            <div
+   521→   521→              className="absolute inset-0 bg-black/50"
+   522→   522→              onClick={() => setDrawer(false)}
+   523→   523→              aria-hidden="true"
+   524→   524→            />
+   525→   525→            <div className="absolute inset-y-0 left-0 w-72 border-r bg-background">
+   526→   526→              {sidebarContent(() => setDrawer(false))}
+   527→   527→            </div>
+   528→   528→          </div>
+   529→   529→        )}
+   530→   530→
+   531→   531→        <main className="min-w-0 flex-1">
+   532→   532→          {view === "watch" && current && data ? (
+   533→   533→            <WatchView
+   534→   534→              video={current}
+   535→   535→              queue={queue}
+   536→   536→              channels={channels}
+   537→   537→              autoplay={autoplay}
+   538→   538→              onAutoplayChange={changeAutoplay}
+   539→   539→              onBack={goHome}
+   540→   540→              onSelect={openInQueue}
+   541→   541→              onTv={() =>
+   542→   542→                openTv(Math.max(0, queue.findIndex((v) => v.id === current.id)))
+   543→   543→              }
+   544→   544→            />
+   545→   545→          ) : view === "history" ? (
+   546→   546→            <div className="mx-auto max-w-4xl px-4 py-4">
+   547→   547→              <div className="mb-4 flex items-center gap-3">
+   548→   548→                <h1 className="text-xl font-bold">Watch history</h1>
+   549→   549→                {histVids.length > 0 && (
+   550→   550→                  <Button variant="outline" size="sm" onClick={clearHist}>
+   551→   551→                    Clear history
+   552→   552→                  </Button>
+   553→   553→                )}
+   554→   554→              </div>
+   555→   555→              {histVids.length === 0 ? (
+   556→   556→                <p className="py-16 text-center text-muted-foreground">
+   557→   557→                  Nothing watched yet — hit the dice and shuffle something up.
+   558→   558→                </p>
+   559→   559→              ) : (
+   560→   560→                <div className="flex flex-col gap-1">
+   561→   561→                  {histVids.map(({ entry, vid }) => (
+   562→   562→                    <button
+   563→   563→                      key={vid.id}
+   564→   564→                      onClick={() => openFromGrid(vid, histVids.map((x) => x.vid))}
+   565→   565→                      className="flex gap-3 rounded-lg p-2 text-left hover:bg-accent"
+   566→   566→                    >
+   567→   567→                      <div className="relative aspect-video w-44 shrink-0 overflow-hidden rounded-md bg-muted">
+   568→   568→                        <img
+   569→   569→                          src={thumbUrl(vid.id)}
+   570→   570→                          alt=""
+   571→   571→                          loading="lazy"
+   572→   572→                          className="h-full w-full object-cover"
+   573→   573→                        />
+   574→   574→                        {fmtDur(vid.d) && (
+   575→   575→                          <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 text-[10px] text-white">
+   576→   576→                            {fmtDur(vid.d)}
+   577→   577→                          </span>
+   578→   578→                        )}
+   579→   579→                      </div>
+   580→   580→                      <div className="min-w-0">
+   581→   581→                        <div className="line-clamp-2 text-sm font-medium">
+   582→   582→                          {vid.t}
+   583→   583→                        </div>
+   584→   584→                        <div className="mt-0.5 text-xs text-muted-foreground">
+   585→   585→                          {metaJoin(chanName(vid, channels), fmtViews(vid.v))}
+   586→   586→                          {" · "}watched {fmtTimeAgo(entry.ts)}
+   587→   587→                        </div>
+   588→   588→                      </div>
+   589→   589→                    </button>
+   590→   590→                  ))}
+   591→   591→                </div>
+   592→   592→              )}
+   593→   593→            </div>
+   594→   594→          ) : (
+   595→   595→            <>
+   596→   596→              {/* Filter chips */}
+   597→   597→              <div className="sticky top-14 z-40 border-b bg-background/95 backdrop-blur">
+   598→   598→                <div className="flex items-center gap-2 overflow-x-auto px-4 py-2">
+   599→   599→                  {chip("all")}
+   600→   600→                  {TIERS.map((t) => chip(t))}
+   601→   601→                  {chan !== null && (
+   602→   602→                    <Badge
+   603→   603→                      variant="outline"
+   604→   604→                      className="flex shrink-0 items-center gap-1 rounded-full px-3 py-1.5 text-sm"
+   605→   605→                    >
+   606→   606→                      {channels[chan]?.n}
+   607→   607→                      <button
+   608→   608→                        onClick={() => setChan(null)}
+   609→   609→                        aria-label="Clear channel filter"
+   610→   610→                      >
+   611→   611→                        <X className="h-3.5 w-3.5" />
+   612→   612→                      </button>
+   613→   613→                    </Badge>
+   614→   614→                  )}
+   615→   615→                  <div className="ml-auto shrink-0 pl-2">
+   616→   616→                    <Select value={sort} onValueChange={(v) => { setSort(v as SortMode); applyFilter(); }}>
+   617→   617→                      <SelectTrigger
+   618→   618→                        size="sm"
+   619→   619→                        className="w-[150px] rounded-full"
+   620→   620→                        aria-label="Sort videos"
+   621→   621→                      >
+   622→   622→                        <SelectValue />
+   623→   623→                      </SelectTrigger>
+   624→   624→                      <SelectContent>
+   625→   625→                        <SelectItem value="newest">Newest (mixed)</SelectItem>
+   626→   626→                        <SelectItem value="curated">By channel order</SelectItem>
+   627→   627→                        <SelectItem value="views">Most viewed</SelectItem>
+   628→   628→                        <SelectItem value="longest">Longest</SelectItem>
+   629→   629→                        <SelectItem value="shuffle">Shuffled</SelectItem>
+   630→   630→                      </SelectContent>
+   631→   631→                    </Select>
+   632→   632→                  </div>
+   633→   633→                </div>
+   634→   634→              </div>
+   635→   635→
+   636→   636→              {/* Meta line */}
+   637→   637→              <div className="px-4 pt-3 text-sm text-muted-foreground">
+   638→   638→                {data ? (
+   639→   639→                  <>
+   640→   640→                    <span className="font-medium text-foreground">
+   641→   641→                      {filtered.length.toLocaleString()} videos
+   642→   642→                    </span>
+   643→   643→                    {" · "}
+   644→   644→                    {channels.length} channels · newest uploads across the whole
+   645→   645→                    line-up, zero algorithm
+   646→   646→                    {pkMode && " · 🇵🇰 Pakistani mode: Pakistani channels hidden"}
+   647→   647→                    {q.trim() && <> · results for “{q.trim()}”</>}
+   648→   648→                  </>
+   649→   649→                ) : loadError ? (
+   650→   650→                  "Couldn’t load the video library."
+   651→   651→                ) : (
+   652→   652→                  "Loading library…"
+   653→   653→                )}
+   654→   654→              </div>
+   655→   655→
+   656→   656→              {/* Grid */}
+   657→   657→              {!data && !loadError ? (
+   658→   658→                <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+   659→   659→                  {Array.from({ length: 12 }).map((_, i) => (
+   660→   660→                    <div key={i}>
+   661→   661→                      <Skeleton className="aspect-video w-full rounded-xl" />
+   662→   662→                      <Skeleton className="mt-2 h-4 w-3/4" />
+   663→   663→                      <Skeleton className="mt-1 h-3 w-1/2" />
+   664→   664→                    </div>
+   665→   665→                  ))}
+   666→   666→                </div>
+   667→   667→              ) : loadError && !data ? (
+   668→   668→                <div className="p-16 text-center text-muted-foreground">
+   669→   669→                  Failed to load videos. Try refreshing the page.
+   670→   670→                </div>
+   671→   671→              ) : filtered.length === 0 ? (
+   672→   672→                <div className="p-16 text-center text-muted-foreground">
+   673→   673→                  No videos match. Try clearing the search or filters.
+   674→   674→                </div>
+   675→   675→              ) : (
+   676→   676→                <>
+   677→   677→                  <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+   678→   678→                    {filtered.slice(0, visible).map((v) => {
+   679→   679→                      const ch: Chan | undefined = channels[v.c];
+   680→   680→                      return (
+   681→   681→                        <button
+   682→   682→                          key={v.id}
+   683→   683→                          onClick={() => openFromGrid(v, filtered)}
+   684→   684→                          className="group text-left"
+   685→   685→                        >
+   686→   686→                          <div className="relative aspect-video overflow-hidden rounded-xl bg-muted">
+   687→   687→                            <img
+   688→   688→                              src={thumbUrl(v.id)}
+   689→   689→                              alt={v.t}
+   690→   690→                              loading="lazy"
+   691→   691→                              className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+   692→   692→                            />
+   693→   693→                            {fmtDur(v.d) && (
+   694→   694→                              <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 text-xs font-medium text-white">
+   695→   695→                                {fmtDur(v.d)}
+   696→   696→                              </span>
+   697→   697→                            )}
+   698→   698→                            <span
+   699→   699→                              className="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-black"
+   700→   700→                              style={{
+   701→   701→                                backgroundColor: TIER_COLORS[(ch?.tier ?? "D") as Tier],
+   702→   702→                              }}
+   703→   703→                            >
+   704→   704→                              {ch?.tier}
+   705→   705→                            </span>
+   706→   706→                          </div>
+   707→   707→                          <div className="mt-2 px-0.5">
+   708→   708→                            <div className="line-clamp-2 text-sm font-medium leading-snug">
+   709→   709→                              {v.t}
+   710→   710→                            </div>
+   711→   711→                            <div className="mt-1 text-xs text-muted-foreground">
+   712→   712→                              {metaJoin(chanName(v, channels), fmtViews(v.v), fmtAge(v.ts))}
+   713→   713→                            </div>
+   714→   714→                          </div>
+   715→   715→                        </button>
+   716→   716→                      );
+   717→   717→                    })}
+   718→   718→                  </div>
+   719→   719→                  {visible < filtered.length && (
+   720→   720→                    <div className="pb-6 text-center">
+   721→   721→                      <Button
+   722→   722→                        variant="outline"
+   723→   723→                        onClick={() => setVisible((n) => n + PAGE * 2)}
+   724→   724→                      >
+   725→   725→                        Load more ({(filtered.length - visible).toLocaleString()} remaining)
+   726→   726→                      </Button>
+   727→   727→                    </div>
+   728→   728→                  )}
+   729→   729→                </>
+   730→   730→              )}
+   731→   731→            </>
+   732→   732→          )}
+   733→   733→        </main>
+   734→   734→      </div>
+   735→   735→
+   736→   736→      {/* Footer */}
+   737→   737→      <footer className="mt-auto border-t">
+   738→   738→        <div className="flex flex-col gap-1 px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+   739→   739→          <span>
+   740→   740→            ChadTube — a personal, algorithm-free video site. Videos play via
+   741→   741→            YouTube embeds.
+   742→   742→          </span>
+   743→   743→          <span>
+   744→   744→            Inspired by Karpathy’s TristanTube · curated from Tristan Hume’s
+   745→   745→            2026 channel tier list · data harvested with yt-dlp
+   746→   746→          </span>
+   747→   747→        </div>
+   748→   748→      </footer>
+   749→   749→
+   750→   750→      {/* TV mode overlay */}
+   751→   751→      {tv && (
+   752→   752→        <TvMode
+   753→   753→          queue={tvQueue}
+   754→   754→          channels={channels}
+   755→   755→          startIndex={tvStart}
+   756→   756→          onExit={() => setTv(false)}
+   757→   757→        />
+   758→   758→      )}
+   759→   759→    </div>
+   760→   760→  );
+   761→   761→}
+   762→   762→

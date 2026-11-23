@@ -92,9 +92,19 @@ export function TubeApp() {
       }
       setMounted(true);
       try {
-        const r = await fetch("/api/videos");
-        if (!r.ok) throw new Error("bad response");
-        const d = (await r.json()) as TubeData;
+        // The inline bootstrap script in layout.tsx starts this request while
+        // the HTML is still parsing; by the time we hydrate it's in flight.
+        const boot = (
+          window as typeof window & { __chadtubeData?: Promise<TubeData> }
+        ).__chadtubeData;
+        let d: TubeData;
+        if (boot) {
+          d = await boot;
+        } else {
+          const r = await fetch("/api/videos?v=2");
+          if (!r.ok) throw new Error("bad response");
+          d = (await r.json()) as TubeData;
+        }
         if (alive) setData(d);
       } catch {
         if (alive) setLoadError(true);
