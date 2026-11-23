@@ -76,6 +76,18 @@ CHANNELS = [
 ]
 
 
+PLAYLISTS = [
+    # (display_name, playlist_id) — your personal mixes. They become a
+    # "★"-tier pseudo-channel in the feed; each video keeps its real uploader.
+    ("niche", "PLLjfE5_7H6o0"),
+]
+
+# Recover upload dates for playlist videos by fetching each uploader's
+# /videos tab and matching ids. Slower (one request per uploader) but it
+# lets your playlist interleave into the newest-first feed. Set False to skip.
+RECOVER_PLAYLIST_DATES = True
+
+
 def norm(s):
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
@@ -138,6 +150,63 @@ def harvest(name, tier, cid):
     return name, {"name": name, "tier": tier, "cid": cid, "videos": vids}, f"ok {len(vids)}"
 
 
+def playlist_flat(pid):
+    p = run(["yt-dlp", "--flat-playlist", "-J", "--no-warnings",
+             f"https://www.youtube.com/playlist?list={pid}"])
+    data = json.loads(p.stdout)
+    out = []
+    for e in (data.get("entries") or []):
+        if not e or not e.get("id"):
+            continue
+        if (e.get("title") or "").startswith(("[Private", "[Deleted", "[Unavailable")):
+            continue
+        out.append(e)
+    return data.get("title") or pid, out
+
+
+def channel_date_map(cid):
+    """{video_id: upload_ts} for an uploader's recent uploads."""
+    try:
+        p = run(["yt-dlp", "--flat-playlist", "-J", "--no-warnings",
+                 "--playlist-end", str(CAP),
+                 "--extractor-args", "youtubetab:approximate_date",
+                 f"https://www.youtube.com/channel/{cid}/videos"])
+        if p.returncode != 0:
+            return {}
+        data = json.loads(p.stdout)
+        return {e["id"]: int(e["timestamp"])
+                for e in (data.get("entries") or [])
+                if e and e.get("id") and e.get("timestamp")}
+    except Exception:
+        return {}
+
+
+def harvest_playlist(name, pid):
+    title, entries = playlist_flat(pid)
+    print(f"playlist “{title}”: {len(entries)} videos")
+    id2ts = {}
+    if RECOVER_PLAYLIST_DATES:
+        cids = sorted({e["channel_id"] for e in entries if e.get("channel_id")})
+        print(f"  recovering dates from {len(cids)} uploaders …")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for m in pool.map(channel_date_map, cids):
+                id2ts.update(m)
+    videos = []
+    for e in entries:
+        row = {"id": e["id"],
+               "t": (e.get("title") or "").strip()[:150],
+               "d": int(e.get("duration") or 0),
+               "v": int(e.get("view_count") or 0),
+               "up": (e.get("uploader") or e.get("channel") or "Unknown").strip()[:80]}
+        if id2ts.get(e["id"]):
+            row["ts"] = id2ts[e["id"]]
+        videos.append(row)
+    dated = sum(1 for v in videos if v.get("ts"))
+    print(f"  dated: {dated}/{len(videos)}")
+    return {"name": name, "tier": "★", "cid": pid, "videos": videos,
+            "keep_order": True}
+
+
 def main():
     chans, fails = [], []
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -149,21 +218,31 @@ def main():
                 chans.append(payload)
             else:
                 fails.append(name)
+    for name, pid in PLAYLISTS:
+        try:
+            chans.append(harvest_playlist(name, pid))
+        except Exception as ex:
+            print(f"playlist failed: {name} ({type(ex).__name__})")
+            fails.append(name)
 
-    # merge: channels sorted by tier then name; per-channel videos newest-first
-    order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+    # merge: channels sorted by tier then name (playlists last); per-channel
+    # videos newest-first, playlists keep their own order
+    order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4, "★": 5}
     chans.sort(key=lambda c: (order.get(c["tier"], 9), c["name"].lower()))
     channels, videos, seen = [], [], set()
     for ch in chans:
         idx = len(channels)
         channels.append({"n": ch["name"], "tier": ch["tier"], "cid": ch["cid"],
                          "count": len(ch["videos"])})
-        for v in sorted(ch["videos"], key=lambda x: x.get("ts", 0), reverse=True):
+        ordered = (ch["videos"] if ch.get("keep_order")
+                   else sorted(ch["videos"], key=lambda x: x.get("ts", 0), reverse=True))
+        for v in ordered:
             if v["id"] in seen:
                 continue
             seen.add(v["id"])
             videos.append({"id": v["id"], "t": v["t"], "d": v["d"], "v": v["v"], "c": idx,
-                           **({"ts": v["ts"]} if v.get("ts") else {})})
+                           **({"ts": v["ts"]} if v.get("ts") else {}),
+                           **({"up": v["up"]} if v.get("up") else {})})
     out = os.path.join(OUT, "videos.json")
     with open(out, "w") as f:
         json.dump({"channels": channels, "videos": videos}, f, separators=(",", ":"))

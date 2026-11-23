@@ -31,6 +31,7 @@ import { TvMode } from "./tv-mode";
 import { WatchView } from "./watch-view";
 import type { Chan, HistEntry, SortMode, Tier, TubeData, Vid } from "./types";
 import {
+  chanName,
   fmtAge,
   fmtDur,
   fmtTimeAgo,
@@ -42,7 +43,7 @@ import {
   thumbUrl,
 } from "./utils";
 
-const TIERS: Tier[] = ["S", "A", "B", "C", "D"];
+const TIERS: Tier[] = ["S", "A", "B", "C", "D", "★"];
 const PAGE = 40;
 
 type View = "home" | "watch" | "history";
@@ -135,15 +136,19 @@ export function TubeApp() {
     if (!data) return [];
     const ql = q.trim().toLowerCase();
     let out = data.videos.filter((v) => {
-      if (tier !== "all" && data.channels[v.c]?.tier !== tier) return false;
+      if (tier !== "all" && (data.channels[v.c]?.tier as Tier) !== tier) return false;
       if (chan !== null && v.c !== chan) return false;
       if (ql) {
         const t = v.t.toLowerCase();
-        const c = (data.channels[v.c]?.n ?? "").toLowerCase();
+        const c = `${data.channels[v.c]?.n ?? ""} ${v.up ?? ""}`.toLowerCase();
         if (!t.includes(ql) && !c.includes(ql)) return false;
       }
       return true;
     });
+    // Feed-level dedupe: same video via its channel AND the playlist keeps the
+    // channel copy in the mixed feed (the ★ filter still shows the full playlist).
+    const seen = new Set<string>();
+    out = out.filter((v) => !seen.has(v.id) && seen.add(v.id));
     if (sort === "newest")
       out = [...out].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v);
     else if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
@@ -532,7 +537,7 @@ export function TubeApp() {
                           {vid.t}
                         </div>
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          {metaJoin(channels[vid.c]?.n, fmtViews(vid.v))}
+                          {metaJoin(chanName(vid, channels), fmtViews(vid.v))}
                           {" · "}watched {fmtTimeAgo(entry.ts)}
                         </div>
                       </div>
@@ -658,7 +663,7 @@ export function TubeApp() {
                               {v.t}
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              {metaJoin(ch?.n, fmtViews(v.v), fmtAge(v.ts))}
+                              {metaJoin(chanName(v, channels), fmtViews(v.v), fmtAge(v.ts))}
                             </div>
                           </div>
                         </button>

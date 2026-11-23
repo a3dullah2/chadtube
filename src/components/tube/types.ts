@@ -6,6 +6,8 @@ export interface Vid {
   c: number;
   /** Approximate upload timestamp (unix seconds). Absent = unknown. */
   ts?: number;
+  /** Real uploader name (playlist videos). Falls back to the channel name. */
+  up?: string;
 }
 
 export interface Chan {
@@ -20,7 +22,7 @@ export interface TubeData {
   videos: Vid[];
 }
 
-export type Tier = "S" | "A" | "B" | "C" | "D";
+export type Tier = "S" | "A" | "B" | "C" | "D" | "★";
 
 export type SortMode = "newest" | "curated" | "views" | "longest" | "shuffle";
 

@@ -7,6 +7,7 @@ export const TIER_COLORS: Record<Tier, string> = {
   B: "#ffe066",
   C: "#9be38a",
   D: "#7cc4ff",
+  "★": "#ffd166",
 };
 
 export const TIER_LABELS: Record<Tier, string> = {
@@ -15,7 +16,13 @@ export const TIER_LABELS: Record<Tier, string> = {
   B: "Basically every video is great",
   C: "Great watching",
   D: "Good quality stuff",
+  "★": "Your playlist",
 };
+
+/** Attribution: playlist videos show their real uploader. */
+export function chanName(v: { up?: string; c: number }, channels: { n: string }[]): string {
+  return v.up || channels[v.c]?.n || "";
+}
 
 export function thumbUrl(id: string, big = false): string {
   return `https://i.ytimg.com/vi/${id}/${big ? "hqdefault" : "mqdefault"}.jpg`;

@@ -159,7 +159,7 @@
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
 "use strict";
-const TIER_COLORS = {S:"#ff7a7a",A:"#ffb46b",B:"#ffe066",C:"#9be38a",D:"#7cc4ff"};
+const TIER_COLORS = {S:"#ff7a7a",A:"#ffb46b",B:"#ffe066",C:"#9be38a",D:"#7cc4ff","★":"#ffd166"};
 const PAGE = 40;
 let DATA = null, q = "", tier = "all", sort = "newest", seed = 1, visible = PAGE;
 let view = "home", queueList = [], current = null, player = null;
@@ -193,7 +193,6 @@ function esc(s){return (s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replac
 async function boot(){
   try{ const r=await fetch("./videos.json"); DATA=await r.json(); }
   catch{ $("#metaline").textContent="Could not load videos.json — serve this folder over HTTP (e.g. python -m http.server)."; return; }
-  const seen=new Set(); DATA.videos=DATA.videos.filter(v=>!seen.has(v.id)&&seen.add(v.id));
   renderChips(); render();
 }
 function filtered(){
@@ -201,9 +200,12 @@ function filtered(){
   let out=DATA.videos.filter(v=>{
     const ch=DATA.channels[v.c];
     if(tier!=="all"&&ch.tier!==tier) return false;
-    if(ql&&!v.t.toLowerCase().includes(ql)&&!ch.n.toLowerCase().includes(ql)) return false;
+    if(ql&&!v.t.toLowerCase().includes(ql)&&!`${ch.n} ${v.up||""}`.toLowerCase().includes(ql)) return false;
     return true;
   });
+  // feed-level dedupe: channel copy wins over the playlist copy
+  const seen=new Set();
+  out=out.filter(v=>!seen.has(v.id)&&seen.add(v.id));
   if(sort==="newest") out=[...out].sort((a,b)=>(b.ts??0)-(a.ts??0)||b.v-a.v);
   else if(sort==="views") out=[...out].sort((a,b)=>b.v-a.v);
   else if(sort==="longest") out=[...out].sort((a,b)=>b.d-a.d);
@@ -221,14 +223,14 @@ function render(){
         ${fmtDur(v.d)?`<span class="dur">${fmtDur(v.d)}</span>`:""}
         <span class="tier" style="background:${TIER_COLORS[ch.tier]}">${ch.tier}</span></div>
       <h3>${esc(v.t)}</h3>
-      <div class="sub">${esc(metaJoin(ch.n,fmtViews(v.v),fmtAge(v.ts)))}</div>
+      <div class="sub">${esc(metaJoin(v.up||ch.n,fmtViews(v.v),fmtAge(v.ts)))}</div>
     </button>`;
   }).join("");
   $("#more").classList.toggle("hidden",visible>=list.length);
   $("#more").textContent=`Load more (${(list.length-visible).toLocaleString()} remaining)`;
 }
 function renderChips(){
-  const tiers=["all","S","A","B","C","D"];
+  const tiers=["all","S","A","B","C","D","★"];
   $("#chips").innerHTML=tiers.map(t=>`<button class="chip ${tier===t?"on":""}" onclick="setTier('${t}')">${
     t==="all"?"All":`<span class="dot" style="background:${TIER_COLORS[t]}"></span>${t}`}</button>`).join("")
     +`<span style="flex:1"></span><select onchange="setSort(this.value)" aria-label="Sort">
@@ -261,13 +263,13 @@ function openVideo(id){
   $("#queueinfo").textContent=idx>=0?`${idx+1} / ${queueList.length} in queue`:"";
   $("#wtitle").textContent=v.t;
   const ch=DATA.channels[v.c];
-  $("#wmeta").innerHTML=`<b style="color:var(--fg)">${esc(ch.n)}</b> · <span class="dot" style="background:${TIER_COLORS[ch.tier]}"></span> ${ch.tier} tier · ${esc(metaJoin(fmtViews(v.v),fmtAge(v.ts),fmtDur(v.d)))}`;
+  $("#wmeta").innerHTML=`<b style="color:var(--fg)">${esc(v.up||ch.n)}</b> · <span class="dot" style="background:${TIER_COLORS[ch.tier]}"></span> ${ch.tier} tier · ${esc(metaJoin(fmtViews(v.v),fmtAge(v.ts),fmtDur(v.d)))}`;
   newPlayer("playerhost",v.id,()=>{const n=nextVid();if(n)setTimeout(()=>openVideo(n.id),1500);});
   const up=queueList.slice(idx+1,idx+26);
   $("#upnext").innerHTML=up.map(u=>`<button onclick="openVideo('${u.id}')">
     <span class="mini"><img loading="lazy" src="${thumb(u.id)}" alt="">${fmtDur(u.d)?`<span class="dur">${fmtDur(u.d)}</span>`:""}</span>
     <span style="min-width:0"><span style="display:block;font-weight:600">${esc(u.t)}</span>
-    <span class="sub">${esc(metaJoin(DATA.channels[u.c].n,fmtViews(u.v),fmtAge(u.ts)))}</span></span></button>`).join("")
+    <span class="sub">${esc(metaJoin(u.up||DATA.channels[u.c].n,fmtViews(u.v),fmtAge(u.ts)))}</span></span></button>`).join("")
     ||`<p class="sub">End of queue.</p>`;
   pushHist(v.id); window.scrollTo({top:0});
 }

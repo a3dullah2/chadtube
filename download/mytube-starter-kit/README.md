@@ -10,7 +10,7 @@ official YouTube embeds.
 | File | Purpose |
 | --- | --- |
 | `index.html` | The whole frontend — one file, zero build step, vanilla JS |
-| `videos.json` | The dataset: 68 channels, ~9.4k videos with upload dates |
+| `videos.json` | The dataset: 69 channels (68 curated + your ★ playlist), ~11.5k videos with upload dates |
 | `harvest_tube.py` | Re-harvest / re-curate the dataset with yt-dlp (no API key) |
 
 ## Run it
@@ -30,7 +30,12 @@ fully static.
 
 - **Healthy mixed feed** — newest uploads from every channel interleaved
   (default sort), so no single channel floods the screen
-- Search, tier chips (S–D), sort: newest / most viewed / longest / shuffled
+- **Your playlists** — add any YouTube playlist to `PLAYLISTS` in the script;
+  it becomes a gold "★" section whose videos join the mixed feed and keep
+  their real uploader name (upload dates recovered from each uploader's
+  channel, ~80% coverage; older deep-catalog adds sort to the end)
+- Search (titles, channels, uploaders), tier chips (S–D + ★), sort: newest /
+  most viewed / longest / shuffled
 - **TV mode** — fullscreen lean-back player: click-catcher over the iframe,
   auto-advance with countdown, keyboard `space / n / p / m / ←→ / esc`
 - Watch view with autoplay-next and an "Up next" queue from your filters
@@ -41,6 +46,7 @@ fully static.
 
 1. Open `harvest_tube.py`, edit the `CHANNELS` list — `(name, tier, channel_id)`.
    `tier` is your own S–D rating (it colors the badges); ids are optional.
+   Add personal mixes to `PLAYLISTS` — `(display_name, playlist_id)`.
 2. `pip install yt-dlp`, then `python3 harvest_tube.py`
 3. Refresh the browser — `videos.json` is regenerated.
 
@@ -58,7 +64,8 @@ feed ordering.
 }
 ```
 
-`c` indexes into `channels`; `ts` is the upload time (unix seconds).
+`c` indexes into `channels`; `ts` is the upload time (unix seconds);
+playlist videos add `up` (real uploader) and sit under the ★ channel.
 
 ## Prefer a "real" web app?
 
