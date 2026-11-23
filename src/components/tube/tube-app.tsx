@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   Dices,
   History,
@@ -55,6 +55,8 @@ export function TubeApp() {
   const [current, setCurrent] = useState<Vid | null>(null);
   const [queue, setQueue] = useState<Vid[]>([]);
   const [q, setQ] = useState("");
+  // Heavy filtering/sorting over 30k videos is deferred so typing stays snappy.
+  const dq = useDeferredValue(q);
   const [tier, setTier] = useState<"all" | Tier>("all");
   const [chan, setChan] = useState<number | null>(null);
   const [sort, setSort] = useState<SortMode>("newest");
@@ -134,7 +136,7 @@ export function TubeApp() {
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    const ql = q.trim().toLowerCase();
+    const ql = dq.trim().toLowerCase();
     let out = data.videos.filter((v) => {
       if (tier !== "all" && (data.channels[v.c]?.tier as Tier) !== tier) return false;
       if (chan !== null && v.c !== chan) return false;
@@ -160,7 +162,7 @@ export function TubeApp() {
     else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
     else if (sort === "shuffle") out = shuffleSeeded(out, seed);
     return out;
-  }, [data, q, tier, chan, sort, seed]);
+  }, [data, dq, tier, chan, sort, seed]);
 
   const applyFilter = useCallback(() => {
     setVisible(PAGE);
