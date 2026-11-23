@@ -22,10 +22,32 @@ export function thumbUrl(id: string, big = false): string {
 }
 
 export function fmtViews(v: number): string {
+  if (!v || v <= 0) return "";
   if (v >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B views";
   if (v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M views";
   if (v >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, "") + "K views";
   return `${v} views`;
+}
+
+/** "3 days ago"-style upload age from a unix-seconds timestamp. */
+export function fmtAge(ts?: number): string {
+  if (!ts) return "";
+  const d = Math.max(0, Math.floor(Date.now() / 1000 - ts) / 86400);
+  const days = Math.floor(d);
+  if (days < 1) return "today";
+  if (days === 1) return "1 day ago";
+  if (days < 30) return `${days} days ago`;
+  if (days < 365) {
+    const m = Math.round(days / 30);
+    return m <= 1 ? "1 month ago" : `${m} months ago`;
+  }
+  const y = Math.round(days / 365);
+  return y <= 1 ? "1 year ago" : `${y} years ago`;
+}
+
+/** Join non-empty meta parts with " · ". */
+export function metaJoin(...parts: (string | undefined)[]): string {
+  return parts.filter(Boolean).join(" · ");
 }
 
 export function fmtDur(d: number): string {

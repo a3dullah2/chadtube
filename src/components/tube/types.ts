@@ -4,6 +4,8 @@ export interface Vid {
   d: number;
   v: number;
   c: number;
+  /** Approximate upload timestamp (unix seconds). Absent = unknown. */
+  ts?: number;
 }
 
 export interface Chan {
@@ -20,7 +22,7 @@ export interface TubeData {
 
 export type Tier = "S" | "A" | "B" | "C" | "D";
 
-export type SortMode = "curated" | "views" | "longest" | "shuffle";
+export type SortMode = "newest" | "curated" | "views" | "longest" | "shuffle";
 
 export interface HistEntry {
   id: string;

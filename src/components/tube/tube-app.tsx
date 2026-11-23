@@ -31,9 +31,11 @@ import { TvMode } from "./tv-mode";
 import { WatchView } from "./watch-view";
 import type { Chan, HistEntry, SortMode, Tier, TubeData, Vid } from "./types";
 import {
+  fmtAge,
   fmtDur,
   fmtTimeAgo,
   fmtViews,
+  metaJoin,
   shuffleSeeded,
   TIER_COLORS,
   TIER_LABELS,
@@ -54,7 +56,7 @@ export function TubeApp() {
   const [q, setQ] = useState("");
   const [tier, setTier] = useState<"all" | Tier>("all");
   const [chan, setChan] = useState<number | null>(null);
-  const [sort, setSort] = useState<SortMode>("curated");
+  const [sort, setSort] = useState<SortMode>("newest");
   const [seed, setSeed] = useState(1);
   const [visible, setVisible] = useState(PAGE);
   const [drawer, setDrawer] = useState(false);
@@ -142,7 +144,9 @@ export function TubeApp() {
       }
       return true;
     });
-    if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
+    if (sort === "newest")
+      out = [...out].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v);
+    else if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
     else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
     else if (sort === "shuffle") out = shuffleSeeded(out, seed);
     return out;
@@ -528,8 +532,8 @@ export function TubeApp() {
                           {vid.t}
                         </div>
                         <div className="mt-0.5 text-xs text-muted-foreground">
-                          {channels[vid.c]?.n} · {fmtViews(vid.v)} ·{" "}
-                          watched {fmtTimeAgo(entry.ts)}
+                          {metaJoin(channels[vid.c]?.n, fmtViews(vid.v))}
+                          {" · "}watched {fmtTimeAgo(entry.ts)}
                         </div>
                       </div>
                     </button>
@@ -568,7 +572,8 @@ export function TubeApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="curated">Curated order</SelectItem>
+                        <SelectItem value="newest">Newest first</SelectItem>
+                        <SelectItem value="curated">By channel order</SelectItem>
                         <SelectItem value="views">Most viewed</SelectItem>
                         <SelectItem value="longest">Longest</SelectItem>
                         <SelectItem value="shuffle">Shuffled</SelectItem>
@@ -586,7 +591,8 @@ export function TubeApp() {
                       {filtered.length.toLocaleString()} videos
                     </span>
                     {" · "}
-                    {channels.length} channels · S–D tier curation, zero algorithm
+                    {channels.length} channels · newest uploads across the whole
+                    line-up, zero algorithm
                     {q.trim() && <> · results for “{q.trim()}”</>}
                   </>
                 ) : loadError ? (
@@ -652,7 +658,7 @@ export function TubeApp() {
                               {v.t}
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">
-                              {ch?.n} · {fmtViews(v.v)}
+                              {metaJoin(ch?.n, fmtViews(v.v), fmtAge(v.ts))}
                             </div>
                           </div>
                         </button>

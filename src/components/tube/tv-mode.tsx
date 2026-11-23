@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useYTPlayer } from "./use-yt";
-import { fmtDur, fmtViews, TIER_COLORS, thumbUrl } from "./utils";
+import { fmtDur, fmtViews, metaJoin, TIER_COLORS, thumbUrl } from "./utils";
 import type { Chan, Tier, Vid } from "./types";
 
 interface TvModeProps {
@@ -322,7 +322,7 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
                 >
                   {chan?.tier}
                 </span>
-                {chan?.n} · {fmtViews(video.v)} · {fmtDur(video.d)}
+                {chan?.n} · {metaJoin(fmtViews(video.v), fmtDur(video.d))}
               </p>
             </div>
             <div className="shrink-0 text-right text-sm text-white/60">
@@ -357,7 +357,7 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
               <div className="max-w-sm text-left">
                 <p className="line-clamp-2 font-semibold">{nextVid.t}</p>
                 <p className="mt-1 text-sm text-white/60">
-                  {channels[nextVid.c]?.n} · {fmtViews(nextVid.v)}
+                  {metaJoin(channels[nextVid.c]?.n, fmtViews(nextVid.v))}
                 </p>
               </div>
             </div>

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { useYTPlayer } from "./use-yt";
-import { fmtDur, fmtViews, TIER_COLORS, thumbUrl } from "./utils";
+import { fmtAge, fmtDur, fmtViews, metaJoin, TIER_COLORS, thumbUrl } from "./utils";
 import type { Chan, Tier, Vid } from "./types";
 
 interface WatchViewProps {
@@ -107,7 +107,8 @@ export function WatchView({
             >
               {chan?.tier} tier
             </Badge>
-            <span>{fmtViews(video.v)}</span>
+            {fmtViews(video.v) && <span>{fmtViews(video.v)}</span>}
+            {fmtAge(video.ts) && <span>{fmtAge(video.ts)}</span>}
             {fmtDur(video.d) && <span>{fmtDur(video.d)}</span>}
           </div>
         </div>
@@ -140,7 +141,7 @@ export function WatchView({
                   <div className="min-w-0">
                     <div className="line-clamp-2 text-sm font-medium">{u.t}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
-                      {channels[u.c]?.n} · {fmtViews(u.v)}
+                      {metaJoin(channels[u.c]?.n, fmtViews(u.v), fmtAge(u.ts))}
                     </div>
                   </div>
                 </button>
