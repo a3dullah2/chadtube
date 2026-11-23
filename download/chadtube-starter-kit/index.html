@@ -92,6 +92,11 @@
   #tv.on{display:block}
   #tv .catcher{position:absolute;inset:0;z-index:10}
   #tvosd{position:absolute;inset:0;z-index:20;pointer-events:none;opacity:1;transition:opacity .3s}
+  #tvend{position:absolute;inset:0;z-index:30;background:#000;display:flex;align-items:center;justify-content:center;text-align:center}
+  #tvend[hidden]{display:none}
+  #tvendlab{letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:#999}
+  #tvendtitle{font-weight:700;font-size:17px;margin:10px auto 18px;max-width:460px}
+  .tvendbtns{display:flex;gap:8px;justify-content:center}
   #tvosd.dim{opacity:0}
   #tvosd .top{position:absolute;top:0;left:0;right:0;padding:14px;display:flex;justify-content:flex-end;gap:8px;
               background:linear-gradient(rgba(0,0,0,.7),transparent)}
@@ -165,6 +170,19 @@
         </div>
       </div>
       <div id="tvbar"><div></div></div>
+    </div>
+  </div>
+  <!-- End card: covers YouTube's own end screen (share / watch-later /
+       "More videos" / logo) while the up-next countdown runs. -->
+  <div id="tvend" hidden>
+    <div class="tvendbox">
+      <div id="tvendlab" class="sub">Up next</div>
+      <div id="tvendtitle"></div>
+      <div class="tvendbtns">
+        <button class="pill" onclick="tvEndPlayNow()">Play now</button>
+        <button class="pill" onclick="tvEndCancel()">Cancel</button>
+        <button class="pill" onclick="tvEndReplay()">Replay</button>
+      </div>
     </div>
   </div>
 </div>
@@ -341,12 +359,14 @@ function tvMount(){
   const n=queueList.length;
   tvIdx=((tvIdx%n)+n)%n;
   const v=queueList[tvIdx];
+  tvEndHide();
   if(tvPlayer){tvPlayer.destroy();tvPlayer=null;}
   tvPlayer=new YT.Player("tvhost",{videoId:v.id,playerVars:{autoplay:1,controls:0,rel:0,modestbranding:1},
     events:{onStateChange:e=>{
-      if(e.data===0){ // ended → up-next countdown
+      if(e.data===0){ // ended → up-next countdown on our own end card
+        tvEndShow();
         clearTimeout(tvCountdown); tvCountdown=setTimeout(()=>tvGo(tvIdx+1),5000);
-      }else clearTimeout(tvCountdown);
+      }else{clearTimeout(tvCountdown); if(e.data===1||e.data===3) tvEndHide();}
     }}});
   const ch=DATA.channels[v.c];
   $("#tvtitle").textContent=v.t;
@@ -362,6 +382,20 @@ function tvMount(){
   pokeOsd();
 }
 function tvGo(i){clearTimeout(tvCountdown);tvIdx=i;tvMount();}
+function tvEndShow(){
+  const n=queueList.length;
+  const nv=queueList[((tvIdx+1)%n)+0]||queueList[0];
+  $("#tvendtitle").textContent=nv?nv.t:"";
+  let left=5;
+  $("#tvendlab").textContent="Up next in "+left+"s";
+  $("#tvend").hidden=false;
+  clearInterval(window.__tvEndIv);
+  window.__tvEndIv=setInterval(()=>{left--; $("#tvendlab").textContent=left>0?"Up next in "+left+"s":"Up next";},1000);
+}
+function tvEndHide(){ $("#tvend").hidden=true; clearInterval(window.__tvEndIv); }
+function tvEndPlayNow(){ tvGo(tvIdx+1); }
+function tvEndCancel(){ clearTimeout(tvCountdown); clearInterval(window.__tvEndIv); $("#tvendlab").textContent="Up next"; }
+function tvEndReplay(){ tvEndHide(); try{tvPlayer.seekTo(0,true);tvPlayer.playVideo();}catch{} }
 function tvToggle(){try{const s=tvPlayer.getPlayerState();s===1?tvPlayer.pauseVideo():tvPlayer.playVideo();}catch{}}
 function tvMute(){try{tvPlayer.isMuted()?tvPlayer.unMute():tvPlayer.mute();}catch{}}
 function pokeOsd(){

@@ -54,6 +54,8 @@ export function WatchView({
   const chan = channels[video.c];
   const upNext = idx >= 0 ? queue.slice(idx + 1, idx + 26) : queue.slice(0, 25);
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endIntRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   // ----- custom player chrome (hover-only controls) -----
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -77,12 +79,16 @@ export function WatchView({
   // video (or after a touch tap), hidden the moment it leaves, and during
   // playback they fade out after 3s without mouse movement. All visibility
   // changes are driven by events (player state, mouse) — never by effects.
-  const scheduleHide = () => {
-    if (idleTimer.current) return;
+  // Reset-style: every call clears any pending hide, so continuous mouse
+  // movement keeps controls up and only true 3s idleness hides them.
+  // (The old guard-against-re-schedule version hid the bar mid-hover because
+  // the first-scheduled timeout was never extended by later movement.)
+  const scheduleHide = (ms = 3000) => {
+    cancelHide();
     idleTimer.current = setTimeout(() => {
       idleTimer.current = null;
       setControlsHidden(true);
-    }, 3000);
+    }, ms);
   };
 
   const cancelHide = () => {
@@ -90,6 +96,36 @@ export function WatchView({
       clearTimeout(idleTimer.current);
       idleTimer.current = null;
     }
+  };
+
+  // Auto-advance bookkeeping for the ended overlay. Cancelled whenever the
+  // user navigates elsewhere, replays, or leaves the watch page.
+  const clearEnd = () => {
+    if (endRef.current) {
+      clearTimeout(endRef.current);
+      endRef.current = null;
+    }
+    if (endIntRef.current) {
+      clearInterval(endIntRef.current);
+      endIntRef.current = null;
+    }
+    setCountdown(null);
+  };
+
+  const replay = () => {
+    clearEnd();
+    const p = playerRef.current;
+    try {
+      p?.seekTo(0, true);
+      p?.playVideo();
+    } catch {
+      /* not ready */
+    }
+  };
+
+  const playNextNow = () => {
+    clearEnd();
+    if (next) onSelect(next);
   };
 
   const togglePlay = () => {
@@ -147,8 +183,15 @@ export function WatchView({
   // The pending click is cancelled when a double-click lands.
   const onShellClick = () => {
     if (touchRef.current) {
-      setTouchUi((v) => !v);
-      if (pstateRef.current === 1) scheduleHide();
+      // Mobile-style: tap toggles the chrome; auto-hide only while playing.
+      if (controlsHidden) {
+        setControlsHidden(false);
+        setTouchUi(true);
+        if (pstateRef.current === 1) scheduleHide();
+      } else {
+        cancelHide();
+        setControlsHidden(true);
+      }
       return;
     }
     if (clickTimer.current) return;
@@ -169,8 +212,18 @@ export function WatchView({
   const onOverlayMouseMove = (e: React.MouseEvent) => {
     setHover(true);
     const inBar = !!(e.target as HTMLElement | null)?.closest?.("[data-ct-bar]");
-    if (pstateRef.current === 1 && !inBar) scheduleHide();
-    else setControlsHidden(false);
+    if (inBar) {
+      // Interacting with the bar itself: pin controls, never fade mid-drag.
+      cancelHide();
+      setControlsHidden(false);
+    } else if (pstateRef.current === 1) {
+      setControlsHidden(false);
+      scheduleHide(); // reset on every move -> only true idleness hides
+    } else {
+      // paused / buffering / ended -> controls stay up while hovered
+      cancelHide();
+      setControlsHidden(false);
+    }
   };
 
   const onShellMouseLeave = () => {
@@ -194,7 +247,15 @@ export function WatchView({
     },
     onEnd: () => {
       if (autoplay && next) {
-        endRef.current = setTimeout(() => onSelect(next), 1500);
+        // Our own end card replaces YouTube's end screen; advance after 5s.
+        setCountdown(5);
+        endIntRef.current = setInterval(() => {
+          setCountdown((c) => (c !== null && c > 1 ? c - 1 : null));
+        }, 1000);
+        endRef.current = setTimeout(() => {
+          clearEnd();
+          onSelect(next);
+        }, 5000);
       }
     },
   });
@@ -202,9 +263,17 @@ export function WatchView({
   useEffect(
     () => () => {
       if (endRef.current) clearTimeout(endRef.current);
+      if (endIntRef.current) clearInterval(endIntRef.current);
     },
     []
   );
+
+  // A pending auto-advance belongs to the video that just ended — navigating
+  // to any other video must cancel it instead of hijacking the navigation.
+  useEffect(() => {
+    clearEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video.id]);
 
   // Player-state polling + controls visibility machinery.
   useEffect(() => {
@@ -369,7 +438,11 @@ export function WatchView({
                   */}
                   <div
                     className={cn("absolute inset-0", !show && "cursor-none")}
-                    onMouseEnter={() => setHover(true)}
+                    onMouseEnter={() => {
+                      setHover(true);
+                      setControlsHidden(false); // show instantly, no wiggle needed
+                      if (pstateRef.current === 1) scheduleHide();
+                    }}
                     onMouseMove={onOverlayMouseMove}
                     onMouseLeave={onShellMouseLeave}
                     onClick={onShellClick}
@@ -485,6 +558,64 @@ export function WatchView({
                     <div className="pointer-events-none absolute inset-0 grid place-items-center">
                       <div className="grid h-16 w-16 place-items-center rounded-full bg-black/60 text-white">
                         <Play className="h-7 w-7 translate-x-0.5" />
+                      </div>
+                    </div>
+                  )}
+
+                  {pstate === 0 && (
+                    /* Opaque end card: fully covers YouTube's own end screen
+                       (share / watch-later buttons, "More videos" row, logo). */
+                    <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">
+                      <div className="flex flex-col items-center gap-4 px-6 text-center">
+                        {next && (
+                          <>
+                            <div className="text-xs uppercase tracking-widest text-white/60">
+                              {countdown !== null
+                                ? `Up next in ${countdown}s`
+                                : "Up next"}
+                            </div>
+                            <button
+                              onClick={playNextNow}
+                              className="w-[440px] max-w-[85vw] rounded-xl bg-white/10 p-4 text-left transition hover:bg-white/15"
+                            >
+                              <div className="line-clamp-2 font-medium">
+                                {next.t}
+                              </div>
+                              <div className="mt-1 text-xs text-white/60">
+                                {chanName(next, channels)}
+                              </div>
+                            </button>
+                          </>
+                        )}
+                        <div className="flex items-center gap-2">
+                          {next && (
+                            <Button
+                              size="sm"
+                              onClick={playNextNow}
+                              className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
+                            >
+                              <SkipForward className="h-4 w-4" /> Play now
+                            </Button>
+                          )}
+                          {countdown !== null && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={clearEnd}
+                              className="border-white/30 bg-transparent text-white hover:bg-white/10"
+                            >
+                              Cancel
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={replay}
+                            className="border-white/30 bg-transparent text-white hover:bg-white/10"
+                          >
+                            Replay
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   )}

@@ -343,7 +343,7 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
 
       {/* Up-next countdown overlay */}
       {pendingDeadline !== null && nextVid && (
-        <div className="absolute inset-0 z-40 grid place-items-center bg-black/85">
+        <div className="absolute inset-0 z-40 grid place-items-center bg-black">
           <div className="flex flex-col items-center gap-4 text-center">
             <p className="text-sm uppercase tracking-widest text-white/60">
               Up next in {countdown}s
