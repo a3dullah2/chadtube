@@ -64,6 +64,8 @@ export function TubeApp() {
   // Pakistani mode: hide Pakistani news & Islamic channels (Dunya News, the
   // Ghamidi circle, SAMAA/Geo reposts, ...) from feed, search and TV queue.
   const [pkMode, setPkMode] = useState(false);
+  // Theater mode: edge-to-edge player on the watch page (YouTube-style).
+  const [theater, setTheater] = useState(false);
   const [visible, setVisible] = useState(PAGE);
   const [drawer, setDrawer] = useState(false);
   const [tv, setTv] = useState(false);
@@ -87,6 +89,7 @@ export function TubeApp() {
         const a = localStorage.getItem("mytube.autoplay");
         if (a !== null) setAutoplay(a === "1");
         if (localStorage.getItem("chadtube.pk") === "1") setPkMode(true);
+        if (localStorage.getItem("chadtube.theater") === "1") setTheater(true);
       } catch {
         /* noop */
       }
@@ -141,6 +144,15 @@ export function TubeApp() {
     setAutoplay(v);
     try {
       localStorage.setItem("mytube.autoplay", v ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  const changeTheater = useCallback((v: boolean) => {
+    setTheater(v);
+    try {
+      localStorage.setItem("chadtube.theater", v ? "1" : "0");
     } catch {
       /* noop */
     }
@@ -519,8 +531,15 @@ export function TubeApp() {
       </header>
 
       <div className="flex flex-1">
-        {/* Desktop sidebar */}
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r md:block">
+        {/* Desktop sidebar — hidden in theater mode so the player gets the
+            full content width, like YouTube collapsing its guide rail. */}
+        <aside
+          className={
+            theater && view === "watch"
+              ? "hidden"
+              : "sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r md:block"
+          }
+        >
           {sidebarContent()}
         </aside>
 
@@ -545,7 +564,9 @@ export function TubeApp() {
               queue={queue}
               channels={channels}
               autoplay={autoplay}
+              theater={theater}
               onAutoplayChange={changeAutoplay}
+              onTheaterChange={changeTheater}
               onBack={goHome}
               onSelect={openInQueue}
               onTv={() =>

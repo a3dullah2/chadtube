@@ -69,7 +69,7 @@
   .watchwrap{max-width:1500px;margin:0 auto;padding:16px;display:grid;gap:20px;
              grid-template-columns:minmax(0,1fr) 360px}
   @media(max-width:1000px){.watchwrap{grid-template-columns:1fr}}
-  .player{aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
+  .player{display:block;width:100%;height:auto;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden}
   .player iframe{width:100%;height:100%;border:0;display:block}
   .upnext{display:flex;flex-direction:column;gap:4px;max-height:80vh;overflow:auto}
   .upnext button{display:flex;gap:10px;padding:6px;border-radius:8px;text-align:left}
@@ -78,6 +78,14 @@
                 background:var(--card)}
   .upnext .mini img{width:100%;height:100%;object-fit:cover}
   .backrow{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  /* theater mode: edge-to-edge player, up next becomes a horizontal strip */
+  .watchwrap.theater{max-width:none;padding:0 0 16px;grid-template-columns:minmax(0,1fr)}
+  .watchwrap.theater .watchmain{padding:0 16px}
+  .watchwrap.theater .player{aspect-ratio:auto;height:min(85vh,56.25vw);border-radius:0;width:calc(100% + 32px);margin:0 -16px}
+  .watchwrap.theater .upnextcol{padding:0 16px}
+  .watchwrap.theater .upnext{flex-direction:row;max-height:none;overflow-x:auto;overflow-y:hidden;padding-bottom:4px}
+  .watchwrap.theater .upnext button{flex-direction:column;flex:0 0 256px}
+  .watchwrap.theater .upnext .mini{flex:none;width:100%}
   .pill{border:1px solid var(--line);border-radius:999px;padding:6px 13px;background:var(--bg2)}
   /* TV mode */
   #tv{position:fixed;inset:0;z-index:100;background:#000;color:#fff;display:none}
@@ -117,18 +125,19 @@
 </main>
 
 <div id="watch" class="watchwrap hidden">
-  <div>
+  <div class="watchmain">
     <div class="backrow">
       <button class="pill" onclick="goHome()">← Back</button>
       <span class="sub" id="queueinfo"></span>
-      <button class="pill" style="margin-left:auto" onclick="openTv(true)">📺 TV mode</button>
+      <button class="pill" id="theaterbtn" style="margin-left:auto" onclick="toggleTheater()" title="Theater mode (t)">▭ Theater</button>
+      <button class="pill" onclick="openTv(true)">📺 TV mode</button>
       <button class="pill" onclick="playNext()">Next ▶</button>
     </div>
     <div class="player" id="playerhost"></div>
     <h2 id="wtitle" style="margin:14px 0 6px;font-size:18px"></h2>
     <div class="sub" id="wmeta"></div>
   </div>
-  <div>
+  <div class="upnextcol">
     <div class="sub" style="font-weight:700;margin-bottom:8px">Up next</div>
     <div class="upnext" id="upnext"></div>
   </div>
@@ -267,9 +276,17 @@ function reshuffle(){sort="shuffle";seed=(Math.random()*1e9)|0;visible=PAGE;rend
 $("#q").addEventListener("input",e=>{q=e.target.value;visible=PAGE;render();});
 $("#more").addEventListener("click",()=>{visible+=PAGE*2;render();});
 
+/* ---------- theater ---------- */
+let theater=false;try{theater=localStorage.getItem("chadtube.theater")==="1"}catch{}
+function toggleTheater(){theater=!theater;try{localStorage.setItem("chadtube.theater",theater?"1":"0")}catch{}applyTheater();}
+function applyTheater(){const w=$("#watch");if(w)w.classList.toggle("theater",theater);}
+
 /* ---------- watch ---------- */
 let ytReady=false, pendingOpen=null;
 window.onYouTubeIframeAPIReady=()=>{ytReady=true;if(pendingOpen){openVideo(pendingOpen);pendingOpen=null;}};
+/* Cached-widget race: the API can fire before this script assigns the handler
+   above, in which case YT.Player already exists and the callback never comes. */
+if(window.YT&&YT.Player){ytReady=true;if(pendingOpen){openVideo(pendingOpen);pendingOpen=null;}}
 function newPlayer(host,vid,onEnd){
   if(player){player.destroy();player=null;}
   player=new YT.Player(host,{videoId:vid,playerVars:{autoplay:1,rel:0,modestbranding:1},
@@ -281,7 +298,7 @@ function openVideo(id){
   current=v;
   if(view!=="watch"){queueList=filtered();}
   view="watch";
-  $("#home").classList.add("hidden"); $("#watch").classList.remove("hidden");
+  $("#home").classList.add("hidden"); $("#watch").classList.remove("hidden"); applyTheater();
   const idx=queueList.findIndex(x=>x.id===id);
   $("#queueinfo").textContent=idx>=0?`${idx+1} / ${queueList.length} in queue`:"";
   $("#wtitle").textContent=v.t;
@@ -369,6 +386,10 @@ document.addEventListener("keydown",e=>{
     return;
   }
   if(e.key==="Escape"&&view==="watch")goHome();
+  else if(e.key==="t"&&view==="watch"){
+    const el=e.target;
+    if(!(el&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA"||el.isContentEditable)))toggleTheater();
+  }
 });
 
 /* ---------- theme ---------- */
