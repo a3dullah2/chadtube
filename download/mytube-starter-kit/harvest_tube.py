@@ -4,6 +4,12 @@
 Zero API keys needed — uses yt-dlp flat playlists with approximate upload
 dates (day-granular for older uploads, exact for recent ones).
 
+Besides CHANNELS and PLAYLISTS, the script can also **discover similar
+channels**: every creator that appears >=2 times in one of your playlists
+gets their catalog harvested as a "R"-tier channel (caps scale with how
+many of their videos you saved). That is what fills the feed with videos
+like your playlist.
+
 Setup:
     pip install yt-dlp          (or: brew install yt-dlp)
 
@@ -86,6 +92,11 @@ PLAYLISTS = [
 # /videos tab and matching ids. Slower (one request per uploader) but it
 # lets your playlist interleave into the newest-first feed. Set False to skip.
 RECOVER_PLAYLIST_DATES = True
+
+# "Videos like my playlist": harvest the catalog of every creator with >=2
+# videos in your playlists, as tier "R" channels. Upload caps scale with
+# playlist affinity: >=5 saved videos -> 250 uploads, 3-4 -> 100, 2 -> 40.
+DISCOVER_SIMILAR = True
 
 
 def norm(s):
@@ -204,7 +215,49 @@ def harvest_playlist(name, pid):
     dated = sum(1 for v in videos if v.get("ts"))
     print(f"  dated: {dated}/{len(videos)}")
     return {"name": name, "tier": "★", "cid": pid, "videos": videos,
-            "keep_order": True}
+            "keep_order": True, "flat": entries}
+
+
+def similar_targets(entries, have_cids):
+    """(cid, name, playlist_count) for creators with >=2 playlist videos."""
+    groups = {}
+    for e in entries:
+        cid = e.get("channel_id")
+        if not cid:
+            continue
+        g = groups.setdefault(cid, [0, ""])
+        g[0] += 1
+        if not g[1]:
+            g[1] = (e.get("uploader") or e.get("channel") or "").strip()[:80]
+    out = [(cid, g[1], g[0]) for cid, g in groups.items()
+           if g[0] >= 2 and cid not in have_cids]
+    out.sort(key=lambda x: (-x[2], x[1].lower()))
+    return out
+
+
+def cap_for(n):
+    return 250 if n >= 5 else (100 if n >= 3 else 40)
+
+
+def harvest_similar(targets):
+    """Fetch catalogs for discovered channels; returns R-tier payloads."""
+    def one(cid, name, n):
+        payload = harvest(name, "R", cid)[1]
+        if payload and len(payload["videos"]) > cap_for(n):
+            payload["videos"] = payload["videos"][:cap_for(n)]
+        return name, payload
+    chans = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = [pool.submit(one, *t) for t in targets]
+        done = 0
+        for f in as_completed(futs):
+            name, payload = f.result()
+            done += 1
+            if done % 25 == 0:
+                print(f"  similar: {done}/{len(targets)} …", flush=True)
+            if payload:
+                chans.append(payload)
+    return chans
 
 
 def main():
@@ -225,9 +278,23 @@ def main():
             print(f"playlist failed: {name} ({type(ex).__name__})")
             fails.append(name)
 
-    # merge: channels sorted by tier then name (playlists last); per-channel
-    # videos newest-first, playlists keep their own order
-    order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4, "★": 5}
+    # discover "videos like the playlist" from every playlist's entries
+    have = {c["cid"] for c in chans}
+    if DISCOVER_SIMILAR and PLAYLISTS:
+        ents = [e for c in chans if c["tier"] == "★" for e in c["flat"]]
+        targets = similar_targets(ents, have)
+        print(f"discovering similar channels: {len(targets)} creators with >=2 "
+              f"playlist videos")
+        try:
+            chans.extend(harvest_similar(targets))
+        except Exception as ex:
+            print(f"similar-harvest failed: {type(ex).__name__}")
+
+    # merge: channels sorted by tier then name (R groups, playlist last);
+    # per-channel videos newest-first, playlists keep their own order.
+    # Playlist rows are never dropped (the ★ filter must show the whole
+    # playlist); cross-channel duplicate ids are resolved in the feed layer.
+    order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4, "R": 5, "★": 6}
     chans.sort(key=lambda c: (order.get(c["tier"], 9), c["name"].lower()))
     channels, videos, seen = [], [], set()
     for ch in chans:
@@ -237,7 +304,7 @@ def main():
         ordered = (ch["videos"] if ch.get("keep_order")
                    else sorted(ch["videos"], key=lambda x: x.get("ts", 0), reverse=True))
         for v in ordered:
-            if v["id"] in seen:
+            if not ch.get("keep_order") and v["id"] in seen:
                 continue
             seen.add(v["id"])
             videos.append({"id": v["id"], "t": v["t"], "d": v["d"], "v": v["v"], "c": idx,

@@ -22,7 +22,7 @@ export interface TubeData {
   videos: Vid[];
 }
 
-export type Tier = "S" | "A" | "B" | "C" | "D" | "★";
+export type Tier = "S" | "A" | "B" | "C" | "D" | "R" | "★";
 
 export type SortMode = "newest" | "curated" | "views" | "longest" | "shuffle";
 

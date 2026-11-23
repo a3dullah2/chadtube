@@ -10,8 +10,8 @@ official YouTube embeds.
 | File | Purpose |
 | --- | --- |
 | `index.html` | The whole frontend — one file, zero build step, vanilla JS |
-| `videos.json` | The dataset: 69 channels (68 curated + your ★ playlist), ~11.5k videos with upload dates |
-| `harvest_tube.py` | Re-harvest / re-curate the dataset with yt-dlp (no API key) |
+| `videos.json` | The dataset: 333 channels (68 curated + 264 discovered from your playlist + your ★ playlist), ~31k videos with upload dates |
+| `harvest_tube.py` | Re-harvest / re-curate the dataset with yt-dlp (no API key) — includes the playlist + "similar channels" discovery pipeline |
 
 ## Run it
 
@@ -29,13 +29,18 @@ fully static.
 ## Features
 
 - **Healthy mixed feed** — newest uploads from every channel interleaved
-  (default sort), so no single channel floods the screen
+  (default sort), with a per-channel slot cap so hyperactive channels (news,
+  music dumps) can't flood the screen
 - **Your playlists** — add any YouTube playlist to `PLAYLISTS` in the script;
   it becomes a gold "★" section whose videos join the mixed feed and keep
   their real uploader name (upload dates recovered from each uploader's
   channel, ~80% coverage; older deep-catalog adds sort to the end)
-- Search (titles, channels, uploaders), tier chips (S–D + ★), sort: newest /
-  most viewed / longest / shuffled
+- **Videos like your playlist** — every creator with ≥2 videos in your
+  playlists gets harvested as a violet "R" channel (catalog size scales with
+  how many of their videos you saved), so the feed keeps serving your taste
+  beyond the playlist itself
+- Search (titles, channels, uploaders), tier chips (S–D + R + ★), sort:
+  newest / most viewed / longest / shuffled
 - **TV mode** — fullscreen lean-back player: click-catcher over the iframe,
   auto-advance with countdown, keyboard `space / n / p / m / ←→ / esc`
 - Watch view with autoplay-next and an "Up next" queue from your filters

@@ -7,6 +7,7 @@ export const TIER_COLORS: Record<Tier, string> = {
   B: "#ffe066",
   C: "#9be38a",
   D: "#7cc4ff",
+  R: "#b8a1ff",
   "★": "#ffd166",
 };
 
@@ -16,6 +17,7 @@ export const TIER_LABELS: Record<Tier, string> = {
   B: "Basically every video is great",
   C: "Great watching",
   D: "Good quality stuff",
+  R: "Discovered from your playlist",
   "★": "Your playlist",
 };
 
