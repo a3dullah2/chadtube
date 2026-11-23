@@ -51,14 +51,22 @@
   MockPlayer.prototype.setVolume = function () {};
   MockPlayer.prototype.getVolume = function () { return 100; };
   MockPlayer.prototype.loadVideoById = function (id) {
+    // Real YT walks: unstarted(-1) -> buffering(3) -> playing(1). The -1/5
+    // window is where the previous video's end screen leaks through.
     this.time = 0;
-    this.state = 3;
-    this.opts.events.onStateChange({ data: 3 });
+    this.state = -1;
+    this.opts.events.onStateChange({ data: -1 });
     var self = this;
     setTimeout(function () {
+      if (self.destroyed) return;
+      self.state = 3;
+      self.opts.events.onStateChange({ data: 3 });
+    }, 250);
+    setTimeout(function () {
+      if (self.destroyed) return;
       self.state = 1;
       self.opts.events.onStateChange({ data: 1 });
-    }, 400);
+    }, 700);
   };
   MockPlayer.prototype.destroy = function () {
     this.destroyed = true;

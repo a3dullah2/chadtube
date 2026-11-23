@@ -30,10 +30,12 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const [osdVisible, setOsdVisible] = useState(true);
   const [progress, setProgress] = useState({ cur: 0, dur: 0 });
   const [pendingDeadline, setPendingDeadline] = useState<number | null>(null);
-  // Leaving an ENDED video: the old end screen lingers in the iframe while
-  // the next one buffers — keep the overlay up (with a spinner) until the
-  // new video actually plays.
-  const [swapping, setSwapping] = useState(false);
+  // A video is loading and has not played its first frame yet. The reused
+  // iframe keeps painting the previous video's last frame (or, if it ended,
+  // its YouTube end screen) through the unstarted/cued/buffering states —
+  // cover all of it, from mount and from every navigation, until the video
+  // actually plays.
+  const [swapping, setSwapping] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const safeIdx = ((idx % queue.length) + queue.length) % Math.max(queue.length, 1);
@@ -44,6 +46,11 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const goTo = useCallback(
     (i: number) => {
       setPendingDeadline(null);
+      // Raise the swap cover before switching: loadVideoById keeps the old
+      // video's last frame / YouTube end screen visible until the new one
+      // buffers (onState clears it once the new video actually plays).
+      playedRef.current = false;
+      setSwapping(true);
       setIdx(((i % queue.length) + queue.length) % queue.length);
       setProgress({ cur: 0, dur: 0 });
       setPaused(false);
@@ -52,20 +59,25 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   );
 
   const advance = useCallback(() => {
-    if (pendingDeadline !== null) setSwapping(true);
     goTo(safeIdx + 1);
-  }, [goTo, safeIdx, pendingDeadline]);
+  }, [goTo, safeIdx]);
   const advanceRef = useRef(advance);
   useEffect(() => {
     advanceRef.current = advance;
   });
   const firedRef = useRef(false);
+  const playedRef = useRef(false); // current video has actually started playing
 
   const { hostRef, playerRef } = useYTPlayer({
     videoId: video?.id ?? "",
     autoplay: true,
     onState: (s) => {
-      if (s === 1 || s === 2) setSwapping(false); // new video is on screen
+      if (s === 1) {
+        playedRef.current = true;
+        setSwapping(false); // new video is on screen
+      } else if (s === 2 && playedRef.current) {
+        setSwapping(false); // user paused an already-started video
+      }
     },
     onEnd: () => {
       firedRef.current = false;
@@ -389,7 +401,10 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-4">
+            <div
+              className="flex flex-col items-center gap-4"
+              onClick={toggle} // loading cover is clickable in case autoplay is blocked
+            >
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
               <p className="text-sm uppercase tracking-widest text-white/60">
                 Loading…

@@ -56,11 +56,14 @@ export function WatchView({
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endIntRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
-  // True while we are leaving an ENDED video and the next one is still
-  // buffering. An opaque cover stays up for this window — otherwise the
-  // previous video's YouTube end screen (share / watch-later / "More
-  // videos" / logo) leaks through for a few seconds at the start.
-  const [swapping, setSwapping] = useState(false);
+  // True while a video is loading and until its first frame actually plays.
+  // The YouTube iframe is REUSED across videos (loadVideoById), and it keeps
+  // painting the previous video's last frame — or, if that one ended, its
+  // full end screen (share / watch-later / "More videos" / logo) — through
+  // the unstarted(-1), cued(5) and buffering(3) states. An opaque cover
+  // hides all of that; it starts true so even the very first video opens on
+  // a clean loading screen instead of stale iframe content.
+  const [swapping, setSwapping] = useState(true);
 
   // ----- custom player chrome (hover-only controls) -----
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +71,7 @@ export function WatchView({
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchRef = useRef(false);
   const pstateRef = useRef(-1);
+  const playedRef = useRef(false); // current video has actually started playing
   const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
@@ -129,11 +133,13 @@ export function WatchView({
     }
   };
 
-  // Navigate to another video. When the current one has ENDED, raise the
-  // swap cover: loadVideoById keeps the old iframe content (end screen
-  // included) visible until the new video's first frame renders.
+  // Navigate to another video. Always raise the swap cover: loadVideoById
+  // keeps the old iframe content — end screen if the video had ended, else
+  // its last frame — visible until the new video's first frame renders.
+  // (The [video.id] effect below raises it too; this covers the same-tick
+  // render so the end card never flashes on the way out.)
   const selectVideo = (v: Vid) => {
-    if (pstateRef.current === 0) setSwapping(true);
+    setSwapping(true);
     clearEnd();
     onSelect(v);
   };
@@ -249,9 +255,12 @@ export function WatchView({
     onState: (s) => {
       pstateRef.current = s;
       setPstate(s);
-      if (s === 1 || s === 2) setSwapping(false); // new video is on screen
-      if (s === 1) scheduleHide();
-      else {
+      if (s === 1) {
+        playedRef.current = true;
+        setSwapping(false); // the new video's first frame is on screen
+        scheduleHide();
+      } else {
+        if (s === 2 && playedRef.current) setSwapping(false);
         cancelHide();
         setControlsHidden(false); // paused/buffering/ended -> show while hovered
       }
@@ -281,8 +290,14 @@ export function WatchView({
 
   // A pending auto-advance belongs to the video that just ended — navigating
   // to any other video must cancel it instead of hijacking the navigation.
+  // Every video change also re-raises the swap cover: the reused iframe keeps
+  // showing the old video's end screen / last frame through the -1/5/3 load
+  // states until the new one actually plays (onState clears it then; a user
+  // pause of an already-started video clears it too).
   useEffect(() => {
     clearEnd();
+    playedRef.current = false;
+    setSwapping(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video.id]);
 
@@ -573,17 +588,29 @@ export function WatchView({
                     </div>
                   )}
 
-                  {swapping && (pstate === 0 || pstate === 3) && (
-                    /* Swap cover: the previous video's YouTube end screen stays
-                       rendered inside the iframe until the next video's first
-                       frame — keep everything hidden while buffering. */
-                    <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">
-                      <div className="flex flex-col items-center gap-4">
-                        <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
-                        <div className="text-xs uppercase tracking-widest text-white/60">
-                          Loading…
+                  {swapping && pstate !== 1 && pstate !== 2 && (
+                    /* Swap cover: until the new video's first frame renders,
+                       the reused iframe still paints the previous video's
+                       YouTube end screen (share / "More videos" / logo) or
+                       last frame. Cover EVERY pre-play state — unstarted
+                       (-1), cued (5), buffering (3), ended (0) mid-swap —
+                       not just buffering: YT walks through -1/5 on
+                       loadVideoById and the old end screen leaks exactly
+                       there. Clicks pass through to the shell so the video
+                       can still be started by hand if autoplay is blocked. */
+                    <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center bg-black text-white">
+                      {pstate === 0 || pstate === 3 ? (
+                        <div className="flex flex-col items-center gap-4">
+                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
+                          <div className="text-xs uppercase tracking-widest text-white/60">
+                            Loading…
+                          </div>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/25">
+                          <Play className="h-7 w-7 translate-x-0.5" />
+                        </div>
+                      )}
                     </div>
                   )}
 
