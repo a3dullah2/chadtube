@@ -59,6 +59,39 @@ export function metaJoin(...parts: (string | undefined)[]): string {
   return parts.filter(Boolean).join(" · ");
 }
 
+/**
+ * Healthy-feed interleave: round-robin across channels so no single channel
+ * can cluster at the top. Input must be newest-first (each channel's group
+ * keeps that order). Each pass takes every channel's next-newest video and
+ * re-sorts the pass by recency — the top of the feed shows at most one video
+ * per channel, and a channel's 2nd video only appears after every other
+ * channel's 1st has run. Playlist rows (★) are grouped by their real
+ * uploader instead of the pseudo-channel.
+ */
+export function interleaveChannels<T extends { c: number; up?: string; ts?: number; v: number }>(
+  videos: T[]
+): T[] {
+  const groups = new Map<string, T[]>();
+  for (const v of videos) {
+    const key = v.up ? `u:${v.up}` : `c:${v.c}`;
+    const g = groups.get(key);
+    if (g) g.push(v);
+    else groups.set(key, [v]);
+  }
+  const out: T[] = [];
+  for (;;) {
+    const round: T[] = [];
+    for (const g of groups.values()) {
+      const v = g.shift();
+      if (v) round.push(v);
+    }
+    if (!round.length) break;
+    round.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v);
+    out.push(...round);
+  }
+  return out;
+}
+
 export function fmtDur(d: number): string {
   if (!d || d <= 0) return "";
   const h = Math.floor(d / 3600);

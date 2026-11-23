@@ -36,6 +36,7 @@ import {
   fmtDur,
   fmtTimeAgo,
   fmtViews,
+  interleaveChannels,
   metaJoin,
   shuffleSeeded,
   TIER_COLORS,
@@ -45,8 +46,6 @@ import {
 
 const TIERS: Tier[] = ["S", "A", "B", "C", "D", "R", "★"];
 const PAGE = 40;
-/** Feed diversity: max slots one channel can occupy in the mixed feeds. */
-const FEED_CAP = 5;
 
 type View = "home" | "watch" | "history";
 
@@ -151,26 +150,16 @@ export function TubeApp() {
     // channel copy in the mixed feed (the ★ filter still shows the full playlist).
     const seen = new Set<string>();
     out = out.filter((v) => !seen.has(v.id) && seen.add(v.id));
-    if (sort === "newest")
-      out = [...out].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v);
-    else if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
+    if (sort === "newest") {
+      // Healthy feed: newest-first inside each channel, then round-robin
+      // across channels so firehose channels (news, music dumps) can't
+      // cluster at the top. Single-channel filters degenerate to identity.
+      out = interleaveChannels(
+        [...out].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0) || b.v - a.v)
+      );
+    } else if (sort === "views") out = [...out].sort((a, b) => b.v - a.v);
     else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
     else if (sort === "shuffle") out = shuffleSeeded(out, seed);
-    // Feed diversity: hyperactive channels (news, music dumps) must not flood
-    // the mixed feed — cap each channel's slots in newest/shuffled mode.
-    // Full catalogs stay available via the channel filter (bypassed there).
-    if ((sort === "newest" || sort === "shuffle") && chan === null) {
-      const per = new Map<number, number>();
-      out = out.filter((v) => {
-        // The ★ playlist is one pseudo-channel but 1,400+ real uploaders —
-        // never cap it (also keeps the ★ filter showing the full playlist).
-        if (data.channels[v.c]?.tier === "★") return true;
-        const n = per.get(v.c) ?? 0;
-        if (n >= FEED_CAP) return false;
-        per.set(v.c, n + 1);
-        return true;
-      });
-    }
     return out;
   }, [data, q, tier, chan, sort, seed]);
 
@@ -594,7 +583,7 @@ export function TubeApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="newest">Newest first</SelectItem>
+                        <SelectItem value="newest">Newest (mixed)</SelectItem>
                         <SelectItem value="curated">By channel order</SelectItem>
                         <SelectItem value="views">Most viewed</SelectItem>
                         <SelectItem value="longest">Longest</SelectItem>

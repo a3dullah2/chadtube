@@ -28,9 +28,10 @@ fully static.
 
 ## Features
 
-- **Healthy mixed feed** — newest uploads from every channel interleaved
-  (default sort), with a per-channel slot cap so hyperactive channels (news,
-  music dumps) can't flood the screen
+- **Healthy mixed feed** — newest uploads round-robin across channels (one
+  video per channel per pass, like a subscriptions feed), so hyperactive
+  channels (news, music dumps) never cluster at the top; full catalogs stay
+  one search away
 - **Your playlists** — add any YouTube playlist to `PLAYLISTS` in the script;
   it becomes a gold "★" section whose videos join the mixed feed and keep
   their real uploader name (upload dates recovered from each uploader's
