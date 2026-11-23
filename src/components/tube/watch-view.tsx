@@ -71,6 +71,7 @@ export function WatchView({
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchRef = useRef(false);
   const pstateRef = useRef(-1);
+  const prevStateRef = useRef(-1); // player state before the current one
   const playedRef = useRef(false); // current video has actually started playing
   const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
   const [cur, setCur] = useState(0);
@@ -253,6 +254,7 @@ export function WatchView({
     videoId: video.id,
     autoplay: true,
     onState: (s) => {
+      prevStateRef.current = pstateRef.current;
       pstateRef.current = s;
       setPstate(s);
       if (s === 1) {
@@ -439,6 +441,13 @@ export function WatchView({
           <div className="min-w-0">
             {(() => {
               const show = (hover || touchUi) && !controlsHidden;
+              // Paused (or paused-then-rebuffering): YouTube paints its own
+              // pause overlay (center play button, share / watch-later,
+              // "More videos" row, logo) over a paused embed and offers no
+              // playerVar to turn it off — so a paused embed is never shown;
+              // it is covered by the poster + our own play glyph instead.
+              const coverPaused =
+                pstate === 2 || (pstate === 3 && prevStateRef.current === 2);
               const playedPct = dur ? (scrub ?? cur / dur) * 100 : 0;
               const bufPct = Math.max(playedPct, buf * 100);
               const seekGrad = `linear-gradient(to right, #e5484d 0%, #e5484d ${playedPct}%, rgba(255,255,255,.55) ${playedPct}%, rgba(255,255,255,.55) ${bufPct}%, rgba(255,255,255,.25) ${bufPct}%)`;
@@ -575,6 +584,40 @@ export function WatchView({
                   </div>
                   </div>
 
+                  {coverPaused && (
+                    /* Paused cover — the video's poster (maxres → hq720 →
+                       hqdefault fallback chain) dimmed, with our own play
+                       button. Sits at z-[5]: above the iframe (hiding YouTube's
+                       pause overlay) but below the control bar (z-10), which
+                       stays usable while paused. pointer-events-none keeps
+                       every click hitting the overlay below (click = resume). */
+                    <div className="pointer-events-none absolute inset-0 z-[5]">
+                      <img
+                        key={video.id}
+                        src={`https://i.ytimg.com/vi/${video.id}/maxresdefault.jpg`}
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          const step = Number(img.dataset.pstep ?? 0);
+                          if (step === 0) {
+                            img.dataset.pstep = "1";
+                            img.src = `https://i.ytimg.com/vi/${video.id}/hq720.jpg`;
+                          } else if (step === 1) {
+                            img.dataset.pstep = "2";
+                            img.src = thumbUrl(video.id, true);
+                          }
+                        }}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/40" />
+                      <div className="absolute inset-0 grid place-items-center">
+                        <div className="grid h-16 w-16 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/30">
+                          <Play className="h-7 w-7 translate-x-0.5" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {pstate === 3 && (
                     <div className="pointer-events-none absolute inset-0 grid place-items-center">
                       <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/25 border-t-white" />
@@ -588,16 +631,17 @@ export function WatchView({
                     </div>
                   )}
 
-                  {swapping && pstate !== 1 && pstate !== 2 && (
+                  {swapping && pstate !== 1 && (
                     /* Swap cover: until the new video's first frame renders,
                        the reused iframe still paints the previous video's
-                       YouTube end screen (share / "More videos" / logo) or
-                       last frame. Cover EVERY pre-play state — unstarted
-                       (-1), cued (5), buffering (3), ended (0) mid-swap —
-                       not just buffering: YT walks through -1/5 on
-                       loadVideoById and the old end screen leaks exactly
-                       there. Clicks pass through to the shell so the video
-                       can still be started by hand if autoplay is blocked. */
+                       YouTube end screen (share / "More videos" / logo), its
+                       last frame, or its PAUSE overlay if the user navigated
+                       while paused. Cover EVERY non-playing state — unstarted
+                       (-1), cued (5), buffering (3), paused (2), ended (0)
+                       mid-swap: YT walks through -1/5 on loadVideoById and
+                       the old content leaks exactly there. Clicks pass
+                       through to the shell so the video can still be started
+                       by hand if autoplay is blocked. */
                     <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center bg-black text-white">
                       {pstate === 0 || pstate === 3 ? (
                         <div className="flex flex-col items-center gap-4">

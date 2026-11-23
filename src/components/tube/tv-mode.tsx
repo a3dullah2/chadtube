@@ -25,7 +25,7 @@ const YT_PLAYING = 1;
 
 export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const [idx, setIdx] = useState(startIndex);
-  const [paused, setPaused] = useState(false);
+  const [pstate, setPstate] = useState(-1); // real YT player state
   const [muted, setMuted] = useState(false);
   const [osdVisible, setOsdVisible] = useState(true);
   const [progress, setProgress] = useState({ cur: 0, dur: 0 });
@@ -47,13 +47,12 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
     (i: number) => {
       setPendingDeadline(null);
       // Raise the swap cover before switching: loadVideoById keeps the old
-      // video's last frame / YouTube end screen visible until the new one
-      // buffers (onState clears it once the new video actually plays).
+      // video's last frame / YouTube end screen / pause overlay visible
+      // until the new one buffers (onState clears it once it plays).
       playedRef.current = false;
       setSwapping(true);
       setIdx(((i % queue.length) + queue.length) % queue.length);
       setProgress({ cur: 0, dur: 0 });
-      setPaused(false);
     },
     [queue.length]
   );
@@ -67,11 +66,16 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   });
   const firedRef = useRef(false);
   const playedRef = useRef(false); // current video has actually started playing
+  const pstateRef = useRef(-1); // mirror of pstate for prev-state tracking
+  const prevStateRef = useRef(-1); // player state before the current one
 
   const { hostRef, playerRef } = useYTPlayer({
     videoId: video?.id ?? "",
     autoplay: true,
     onState: (s) => {
+      prevStateRef.current = pstateRef.current;
+      pstateRef.current = s;
+      setPstate(s);
       if (s === 1) {
         playedRef.current = true;
         setSwapping(false); // new video is on screen
@@ -145,13 +149,8 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
     const p = playerRef.current;
     if (!p) return;
     try {
-      if (p.getPlayerState() === YT_PLAYING) {
-        p.pauseVideo();
-        setPaused(true);
-      } else {
-        p.playVideo();
-        setPaused(false);
-      }
+      if (p.getPlayerState() === YT_PLAYING) p.pauseVideo();
+      else p.playVideo();
     } catch {
       /* not ready */
     }
@@ -267,11 +266,35 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
         aria-label="Toggle playback"
       />
 
-      {/* Paused indicator */}
-      {paused && (
-        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center">
-          <div className="rounded-full bg-black/60 p-6">
-            <Play className="h-12 w-12 fill-white text-white" />
+      {/* Paused cover: YouTube paints its own pause overlay (center play
+          button, share / watch-later, "More videos", logo) over a paused
+          embed and there is no playerVar to disable it — cover it with the
+          video's poster + our play glyph instead. z-[15]: above the click
+          catcher (clicks pass through it, click = resume), below the OSD. */}
+      {(pstate === 2 || (pstate === 3 && prevStateRef.current === 2)) && (
+        <div className="pointer-events-none absolute inset-0 z-[15]">
+          <img
+            key={video.id}
+            src={`https://i.ytimg.com/vi/${video.id}/maxresdefault.jpg`}
+            onError={(e) => {
+              const img = e.currentTarget;
+              const step = Number(img.dataset.pstep ?? 0);
+              if (step === 0) {
+                img.dataset.pstep = "1";
+                img.src = `https://i.ytimg.com/vi/${video.id}/hq720.jpg`;
+              } else if (step === 1) {
+                img.dataset.pstep = "2";
+                img.src = thumbUrl(video.id, true);
+              }
+            }}
+            alt=""
+            className="h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-black/40" />
+          <div className="absolute inset-0 grid place-items-center">
+            <div className="grid h-16 w-16 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/30">
+              <Play className="h-7 w-7 translate-x-0.5" />
+            </div>
           </div>
         </div>
       )}
