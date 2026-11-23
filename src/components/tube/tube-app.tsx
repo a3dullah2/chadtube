@@ -7,7 +7,6 @@ import {
   Home,
   Menu,
   Moon,
-  Play,
   Search,
   Sun,
   Tv,
@@ -383,12 +382,17 @@ export function TubeApp() {
           <button
             className="flex items-center gap-2"
             onClick={goHome}
-            aria-label="MyTube home"
+            aria-label="ChadTube home"
           >
-            <span className="grid h-7 w-10 place-items-center rounded-md bg-[#e5484d]">
-              <Play className="h-4 w-4 fill-white text-white" />
-            </span>
-            <span className="text-lg font-bold tracking-tight">MyTube</span>
+            <img
+              src="/chad.png"
+              alt="ChadTube logo"
+              width={36}
+              height={36}
+              draggable={false}
+              className="chad-logo h-9 w-auto select-none"
+            />
+            <span className="text-lg font-bold tracking-tight">ChadTube</span>
           </button>
           <div className="relative mx-auto hidden max-w-xl flex-1 sm:block">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -697,7 +701,7 @@ export function TubeApp() {
       <footer className="mt-auto border-t">
         <div className="flex flex-col gap-1 px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <span>
-            MyTube — a personal, algorithm-free video site. Videos play via
+            ChadTube — a personal, algorithm-free video site. Videos play via
             YouTube embeds.
           </span>
           <span>

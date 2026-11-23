@@ -1,4 +1,4 @@
-# MyTube — your personal YouTube
+# ChadTube — your personal YouTube
 
 A TristanTube-style personal video site: a **mixed, newest-first feed across all
 your favorite channels** — like the YouTube subscriptions feed, minus the
@@ -18,7 +18,7 @@ official YouTube embeds.
 `fetch()` can't read local files from `file://`, so serve over HTTP:
 
 ```bash
-cd mytube-starter-kit
+cd chadtube-starter-kit
 python -m http.server 8000
 # open http://localhost:8000
 ```

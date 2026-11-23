@@ -15,13 +15,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MyTube — your personal nerd TV",
+  title: "ChadTube — your personal nerd TV",
   description:
     "A personal, algorithm-free video site: curated channels, thousands of videos, and a TV mode for lean-back watching.",
-  keywords: ["MyTube", "TV mode", "curated", "YouTube", "nerd TV"],
-  icons: {
-    icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1' y='4' width='22' height='16' rx='5' fill='%23e5484d'/><path d='M10 8.5v7l6-3.5z' fill='white'/></svg>",
-  },
+  keywords: ["ChadTube", "TV mode", "curated", "YouTube", "nerd TV"],
 };
 
 export default function RootLayout({

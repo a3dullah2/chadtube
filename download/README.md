@@ -1,6 +1,6 @@
 Here are all the generated files.
 
-## mytube-starter-kit/
+## chadtube-starter-kit/
 Your personal YouTube site, ready to run:
 - `index.html` — single-file frontend (mixed newest-first feed with per-channel diversity cap, TV mode, history, themes)
 - `videos.json` — 333 channels / 30,953 dated videos: 68 curated + 264 channels discovered from your playlist (violet "R" tier) + your ★ "niche" playlist

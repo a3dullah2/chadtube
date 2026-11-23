@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MyTube — your personal nerd TV</title>
+<title>ChadTube — your personal nerd TV</title>
+<link rel="icon" type="image/png" href="chad.png">
 <style>
   :root{
     --bg:#0b0b0d; --bg2:#131316; --fg:#f2f2f4; --muted:#9b9ba4;
@@ -22,9 +23,15 @@
          backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
   .hrow{display:flex;align-items:center;gap:10px;height:56px;padding:0 16px}
   .logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:18px}
-  .logo .play{width:28px;height:20px;border-radius:6px;background:var(--accent);
-              display:grid;place-items:center}
-  .logo .play::after{content:"";border-left:8px solid #fff;border-block:5px solid transparent}
+  .logo .chad-logo{height:34px;width:auto;user-select:none}
+  /* mascot spins in on first page load, keeps spinning while hovered */
+  @keyframes chad-spin-in{0%{transform:rotate(0deg) scale(.4);opacity:0}
+                         55%{transform:rotate(720deg) scale(1.18);opacity:1}
+                         100%{transform:rotate(720deg) scale(1);opacity:1}}
+  @keyframes chad-spin{to{transform:rotate(360deg)}}
+  .chad-logo{animation:chad-spin-in 1.5s cubic-bezier(.22,1,.36,1) 1 both}
+  .chad-logo:hover{animation:chad-spin .9s linear infinite}
+  @media (prefers-reduced-motion:reduce){.chad-logo{animation:none}}
   .search{flex:1;max-width:560px;margin:0 auto;position:relative}
   .search input{width:100%;height:36px;border-radius:999px;border:1px solid var(--line);
                 background:var(--bg2);color:var(--fg);padding:0 14px;outline:none}
@@ -92,7 +99,7 @@
 <body>
 <header>
   <div class="hrow">
-    <button class="logo" onclick="goHome()"><span class="play"></span>MyTube</button>
+    <button class="logo" onclick="goHome()"><img src="chad.png" class="chad-logo" alt="ChadTube logo" draggable="false">ChadTube</button>
     <div class="search"><input id="q" placeholder="Search videos and channels…" aria-label="Search"></div>
     <button class="iconbtn" onclick="reshuffle()" title="Shuffle">🎲</button>
     <button class="iconbtn" onclick="toggleTheme()" id="themebtn" title="Toggle theme">🌙</button>
@@ -152,7 +159,7 @@
 </div>
 
 <footer>
-  MyTube — a personal, algorithm-free video site. Videos play via YouTube embeds ·
+  ChadTube — a personal, algorithm-free video site. Videos play via YouTube embeds ·
   inspired by Karpathy’s TristanTube · data harvested with yt-dlp.
 </footer>
 
