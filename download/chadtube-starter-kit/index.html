@@ -37,6 +37,7 @@
                 background:var(--bg2);color:var(--fg);padding:0 14px;outline:none}
   .iconbtn{width:36px;height:36px;border-radius:999px;display:grid;place-items:center;font-size:16px}
   .iconbtn:hover{background:var(--bg2)}
+  #pkbtn.on{background:var(--fg);color:var(--bg)}
   .tvbtn{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;
          border-radius:999px;padding:7px 14px;font-weight:600}
   .chips{display:flex;gap:8px;overflow-x:auto;padding:8px 16px;border-bottom:1px solid var(--line);
@@ -103,6 +104,7 @@
     <div class="search"><input id="q" placeholder="Search videos and channels…" aria-label="Search"></div>
     <button class="iconbtn" onclick="reshuffle()" title="Shuffle">🎲</button>
     <button class="iconbtn" onclick="toggleTheme()" id="themebtn" title="Toggle theme">🌙</button>
+    <button class="iconbtn" onclick="togglePk()" id="pkbtn" title="Pakistani mode — hide Pakistani news & Islamic channels">🇵🇰</button>
     <button class="tvbtn" onclick="openTv()">📺 TV mode</button>
   </div>
   <div class="chips" id="chips"></div>
@@ -168,7 +170,7 @@
 "use strict";
 const TIER_COLORS = {S:"#ff7a7a",A:"#ffb46b",B:"#ffe066",C:"#9be38a",D:"#7cc4ff",R:"#b8a1ff","★":"#ffd166"};
 const PAGE = 40;
-let DATA = null, q = "", tier = "all", sort = "newest", seed = 1, visible = PAGE;
+let DATA = null, q = "", tier = "all", sort = "newest", seed = 1, visible = PAGE, PK = false;
 let view = "home", queueList = [], current = null, player = null;
 let tvIdx = 0, tvPlayer = null, tvCountdown = null, tvIdle = null;
 let hist = [];
@@ -218,6 +220,7 @@ function filtered(){
   let out=DATA.videos.filter(v=>{
     const ch=DATA.channels[v.c];
     if(tier!=="all"&&ch.tier!==tier) return false;
+    if(PK&&(ch.pk||v.pk)) return false;
     if(ql&&!v.t.toLowerCase().includes(ql)&&!`${ch.n} ${v.up||""}`.toLowerCase().includes(ql)) return false;
     return true;
   });
@@ -232,7 +235,7 @@ function filtered(){
 }
 function render(){
   const list=filtered();
-  $("#metaline").textContent=`${list.length.toLocaleString()} videos · ${DATA.channels.length} channels · newest uploads spread across the whole line-up${q.trim()?` · results for “${q.trim()}”`:""}`;
+  $("#metaline").textContent=`${list.length.toLocaleString()} videos · ${DATA.channels.length} channels · newest uploads spread across the whole line-up${PK?" · 🇵🇰 Pakistani mode: Pakistani channels hidden":""}${q.trim()?` · results for “${q.trim()}”`:""}`;
   const seenIds=new Set(hist);
   $("#grid").innerHTML=list.slice(0,visible).map(v=>{
     const ch=DATA.channels[v.c];
@@ -258,6 +261,8 @@ function renderChips(){
 }
 function setTier(t){tier=t;visible=PAGE;renderChips();render();window.scrollTo({top:0});}
 function setSort(s){sort=s;visible=PAGE;render();window.scrollTo({top:0});}
+function togglePk(){PK=!PK;visible=PAGE;try{localStorage.setItem("chadtube.pk",PK?"1":"0")}catch{}
+  const b=$("#pkbtn");if(b)b.classList.toggle("on",PK);render();window.scrollTo({top:0});}
 function reshuffle(){sort="shuffle";seed=(Math.random()*1e9)|0;visible=PAGE;renderChips();render();}
 $("#q").addEventListener("input",e=>{q=e.target.value;visible=PAGE;render();});
 $("#more").addEventListener("click",()=>{visible+=PAGE*2;render();});
@@ -373,6 +378,7 @@ function toggleTheme(){
   try{localStorage.setItem("mytube.theme",light?"light":"dark");}catch{}
 }
 try{if(localStorage.getItem("mytube.theme")==="light"){document.documentElement.classList.add("light");$("#themebtn").textContent="☀️";}}catch{}
+try{if(localStorage.getItem("chadtube.pk")==="1"){PK=true;const b=$("#pkbtn");if(b)b.classList.add("on");}}catch{}
 
 boot();
 </script>

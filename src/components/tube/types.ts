@@ -8,6 +8,8 @@ export interface Vid {
   ts?: number;
   /** Real uploader name (playlist videos). Falls back to the channel name. */
   up?: string;
+  /** Flagged as Pakistani media (hidden when Pakistani mode is on). */
+  pk?: number;
 }
 
 export interface Chan {
@@ -15,6 +17,8 @@ export interface Chan {
   tier: string;
   cid: string;
   count: number;
+  /** Flagged as Pakistani media (hidden when Pakistani mode is on). */
+  pk?: number;
 }
 
 export interface TubeData {

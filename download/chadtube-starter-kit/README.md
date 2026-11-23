@@ -11,6 +11,7 @@ official YouTube embeds.
 | --- | --- |
 | `index.html` | The whole frontend — one file, zero build step, vanilla JS |
 | `videos.json` | The dataset: 333 channels (68 curated + 264 discovered from your playlist + your ★ playlist), ~31k videos with upload dates |
+| `mark_pakistani.py` | Flags Pakistani news & Islamic channels (`"pk": 1` on channels/rows) for the 🇵🇰 Pakistani-mode toggle |
 | `harvest_tube.py` | Re-harvest / re-curate the dataset with yt-dlp (no API key) — includes the playlist + "similar channels" discovery pipeline |
 
 ## Run it
@@ -42,6 +43,9 @@ fully static.
   beyond the playlist itself
 - Search (titles, channels, uploaders), tier chips (S–D + R + ★), sort:
   newest / most viewed / longest / shuffled
+- **🇵🇰 Pakistani mode** — header toggle that hides Pakistani news & Islamic
+  channels (Dunya News, the Ghamidi/Al-Mawrid circle, SAMAA/Geo reposts…)
+  from feed, search and TV mode; your choice is remembered locally
 - **TV mode** — fullscreen lean-back player: click-catcher over the iframe,
   auto-advance with countdown, keyboard `space / n / p / m / ←→ / esc`
 - Watch view with autoplay-next and an "Up next" queue from your filters
@@ -72,6 +76,9 @@ feed ordering.
 
 `c` indexes into `channels`; `ts` is the upload time (unix seconds);
 playlist videos add `up` (real uploader) and sit under the ★ channel.
+Rows/channels flagged `"pk": 1` are hidden while Pakistani mode is on
+(about 3.9k of the 30,953 videos: Dunya News, the Ghamidi circle, and
+title-matched reposts of Pakistani media).
 
 ## Prefer a "real" web app?
 

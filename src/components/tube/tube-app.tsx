@@ -61,6 +61,9 @@ export function TubeApp() {
   const [chan, setChan] = useState<number | null>(null);
   const [sort, setSort] = useState<SortMode>("newest");
   const [seed, setSeed] = useState(1);
+  // Pakistani mode: hide Pakistani news & Islamic channels (Dunya News, the
+  // Ghamidi circle, SAMAA/Geo reposts, ...) from feed, search and TV queue.
+  const [pkMode, setPkMode] = useState(false);
   const [visible, setVisible] = useState(PAGE);
   const [drawer, setDrawer] = useState(false);
   const [tv, setTv] = useState(false);
@@ -83,6 +86,7 @@ export function TubeApp() {
         if (h) setHist(JSON.parse(h));
         const a = localStorage.getItem("mytube.autoplay");
         if (a !== null) setAutoplay(a === "1");
+        if (localStorage.getItem("chadtube.pk") === "1") setPkMode(true);
       } catch {
         /* noop */
       }
@@ -140,6 +144,7 @@ export function TubeApp() {
     let out = data.videos.filter((v) => {
       if (tier !== "all" && (data.channels[v.c]?.tier as Tier) !== tier) return false;
       if (chan !== null && v.c !== chan) return false;
+      if (pkMode && (data.channels[v.c]?.pk || v.pk)) return false;
       if (ql) {
         const t = v.t.toLowerCase();
         const c = `${data.channels[v.c]?.n ?? ""} ${v.up ?? ""}`.toLowerCase();
@@ -162,7 +167,7 @@ export function TubeApp() {
     else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
     else if (sort === "shuffle") out = shuffleSeeded(out, seed);
     return out;
-  }, [data, dq, tier, chan, sort, seed]);
+  }, [data, dq, tier, chan, sort, seed, pkMode]);
 
   const applyFilter = useCallback(() => {
     setVisible(PAGE);
@@ -189,6 +194,23 @@ export function TubeApp() {
     },
     [pushHist]
   );
+
+  const togglePk = useCallback(() => {
+    const next = !pkMode;
+    setPkMode(next);
+    try {
+      localStorage.setItem("chadtube.pk", next ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    applyFilter();
+    toast({
+      title: next ? "Pakistani mode on" : "Pakistani mode off",
+      description: next
+        ? "Pakistani news & Islamic channels are hidden"
+        : "Pakistani channels are back in the feed",
+    });
+  }, [pkMode, applyFilter, toast]);
 
   const reshuffle = useCallback(() => {
     setSort("shuffle");
@@ -447,6 +469,17 @@ export function TubeApp() {
             <Button
               variant="ghost"
               size="icon"
+              onClick={togglePk}
+              aria-label="Pakistani mode"
+              aria-pressed={pkMode}
+              title="Pakistani mode: hide Pakistani news & Islamic channels"
+              className={pkMode ? "bg-foreground text-background hover:bg-foreground/90" : ""}
+            >
+              <span className="text-base leading-none">🇵🇰</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={toggleTheme}
               aria-label="Toggle theme"
             >
@@ -610,6 +643,7 @@ export function TubeApp() {
                     {" · "}
                     {channels.length} channels · newest uploads across the whole
                     line-up, zero algorithm
+                    {pkMode && " · 🇵🇰 Pakistani mode: Pakistani channels hidden"}
                     {q.trim() && <> · results for “{q.trim()}”</>}
                   </>
                 ) : loadError ? (
