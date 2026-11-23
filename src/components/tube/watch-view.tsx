@@ -1,7 +1,19 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { ArrowLeft, RectangleHorizontal, SkipForward, Tv } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  Maximize,
+  Minimize,
+  Pause,
+  Play,
+  RectangleHorizontal,
+  SkipForward,
+  Tv,
+  Volume1,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -43,6 +55,150 @@ export function WatchView({
   const upNext = idx >= 0 ? queue.slice(idx + 1, idx + 26) : queue.slice(0, 25);
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ----- custom player chrome (hover-only controls) -----
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchRef = useRef(false);
+  const pstateRef = useRef(-1);
+  const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
+  const [cur, setCur] = useState(0);
+  const [dur, setDur] = useState(0);
+  const [buf, setBuf] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [vol, setVol] = useState(100);
+  const [hover, setHover] = useState(false);
+  const [touchUi, setTouchUi] = useState(false);
+  const [controlsHidden, setControlsHidden] = useState(false);
+  const [fs, setFs] = useState(false);
+  const [scrub, setScrub] = useState<number | null>(null); // seek fraction while dragging
+
+  // Controls follow YouTube's rules: visible while the mouse is over the
+  // video (or after a touch tap), hidden the moment it leaves, and during
+  // playback they fade out after 3s without mouse movement. All visibility
+  // changes are driven by events (player state, mouse) — never by effects.
+  const scheduleHide = () => {
+    if (idleTimer.current) return;
+    idleTimer.current = setTimeout(() => {
+      idleTimer.current = null;
+      setControlsHidden(true);
+    }, 3000);
+  };
+
+  const cancelHide = () => {
+    if (idleTimer.current) {
+      clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    }
+  };
+
+  const togglePlay = () => {
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      if (p.getPlayerState?.() === 1) p.pauseVideo();
+      else p.playVideo();
+    } catch {
+      /* not ready */
+    }
+  };
+
+  const toggleMute = () => {
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      if (p.isMuted?.()) p.unMute();
+      else p.mute();
+    } catch {
+      /* not ready */
+    }
+  };
+
+  const changeVol = (v: number) => {
+    const p = playerRef.current;
+    if (!p) return;
+    try {
+      p.setVolume(v);
+      if (v > 0 && p.isMuted?.()) p.unMute();
+    } catch {
+      /* not ready */
+    }
+    setVol(v);
+  };
+
+  const toggleFs = () => {
+    const el = shellRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else el.requestFullscreen?.().catch(() => {});
+  };
+
+  const seekTo = (frac: number) => {
+    const p = playerRef.current;
+    if (!p || !dur) return;
+    try {
+      p.seekTo(frac * dur, true);
+    } catch {
+      /* not ready */
+    }
+  };
+
+  // Click on the video toggles playback; double-click goes fullscreen.
+  // The pending click is cancelled when a double-click lands.
+  const onShellClick = () => {
+    if (touchRef.current) {
+      setTouchUi((v) => !v);
+      if (pstateRef.current === 1) scheduleHide();
+      return;
+    }
+    if (clickTimer.current) return;
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null;
+      togglePlay();
+    }, 250);
+  };
+
+  const onShellDoubleClick = () => {
+    if (clickTimer.current) {
+      clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+    }
+    toggleFs();
+  };
+
+  const onOverlayMouseMove = (e: React.MouseEvent) => {
+    setHover(true);
+    const inBar = !!(e.target as HTMLElement | null)?.closest?.("[data-ct-bar]");
+    if (pstateRef.current === 1 && !inBar) scheduleHide();
+    else setControlsHidden(false);
+  };
+
+  const onShellMouseLeave = () => {
+    setHover(false);
+    setTouchUi(false);
+    cancelHide();
+    setControlsHidden(true); // mouse off the video -> always hide
+  };
+
+  const { hostRef, playerRef } = useYTPlayer({
+    videoId: video.id,
+    autoplay: true,
+    onState: (s) => {
+      pstateRef.current = s;
+      setPstate(s);
+      if (s === 1) scheduleHide();
+      else {
+        cancelHide();
+        setControlsHidden(false); // paused/buffering/ended -> show while hovered
+      }
+    },
+    onEnd: () => {
+      if (autoplay && next) {
+        endRef.current = setTimeout(() => onSelect(next), 1500);
+      }
+    },
+  });
+
   useEffect(
     () => () => {
       if (endRef.current) clearTimeout(endRef.current);
@@ -50,10 +206,43 @@ export function WatchView({
     []
   );
 
-  // "t" toggles theater mode, like YouTube's keyboard shortcut.
+  // Player-state polling + controls visibility machinery.
+  useEffect(() => {
+    try {
+      touchRef.current = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    } catch {
+      /* noop */
+    }
+    const poll = setInterval(() => {
+      const p = playerRef.current;
+      if (!p || typeof p.getCurrentTime !== "function") return;
+      try {
+        setCur(p.getCurrentTime() || 0);
+        setDur(p.getDuration() || 0);
+        setBuf(p.getVideoLoadedFraction() || 0);
+        setMuted(!!p.isMuted?.());
+        const v = p.getVolume?.();
+        if (typeof v === "number") setVol(v);
+      } catch {
+        /* player mid-swap */
+      }
+    }, 250);
+    const onFs = () => setFs(document.fullscreenElement === shellRef.current);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => {
+      clearInterval(poll);
+      document.removeEventListener("fullscreenchange", onFs);
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+      if (clickTimer.current) clearTimeout(clickTimer.current);
+    };
+  }, []);
+
+  // YouTube-style shortcuts (t = theater, f = fullscreen, m = mute,
+  // space/k = play-pause, arrows = seek). Inline player calls keep this
+  // effect's dependencies to just the theater props.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "t" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (
         el &&
@@ -62,21 +251,36 @@ export function WatchView({
           el.isContentEditable)
       )
         return;
-      onTheaterChange(!theater);
+      if (e.key === "t") {
+        onTheaterChange(!theater);
+        return;
+      }
+      const p = playerRef.current;
+      if (!p) return;
+      try {
+        if (e.key === " " || e.key === "k") {
+          e.preventDefault();
+          if (p.getPlayerState?.() === 1) p.pauseVideo();
+          else p.playVideo();
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          p.seekTo(p.getCurrentTime() + 5, true);
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          p.seekTo(Math.max(0, p.getCurrentTime() - 5), true);
+        } else if (e.key === "m") {
+          if (p.isMuted?.()) p.unMute();
+          else p.mute();
+        } else if (e.key === "f") {
+          toggleFs();
+        }
+      } catch {
+        /* not ready */
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [theater, onTheaterChange]);
-
-  const { hostRef } = useYTPlayer({
-    videoId: video.id,
-    autoplay: true,
-    onEnd: () => {
-      if (autoplay && next) {
-        endRef.current = setTimeout(() => onSelect(next), 1500);
-      }
-    },
-  });
+  }, [theater, onTheaterChange, playerRef]);
 
   return (
     <>
@@ -138,15 +342,155 @@ export function WatchView({
           }
         >
           <div className="min-w-0">
-            <div
-              className={cn(
-                "overflow-hidden bg-black",
-                theater ? "w-full" : "aspect-video w-full rounded-xl"
-              )}
-              style={theater ? { height: "min(85vh, 56.25vw)" } : undefined}
-            >
-              <div ref={hostRef} className="h-full w-full" />
-            </div>
+            {(() => {
+              const show = (hover || touchUi) && !controlsHidden;
+              const playedPct = dur ? (scrub ?? cur / dur) * 100 : 0;
+              const bufPct = Math.max(playedPct, buf * 100);
+              const seekGrad = `linear-gradient(to right, #e5484d 0%, #e5484d ${playedPct}%, rgba(255,255,255,.55) ${playedPct}%, rgba(255,255,255,.55) ${bufPct}%, rgba(255,255,255,.25) ${bufPct}%)`;
+              const volPct = muted ? 0 : vol;
+              const volGrad = `linear-gradient(to right, #fff 0%, #fff ${volPct}%, rgba(255,255,255,.25) ${volPct}%)`;
+              return (
+                <div
+                  ref={shellRef}
+                  className={cn(
+                    "relative overflow-hidden bg-black",
+                    theater ? "w-full" : "aspect-video w-full rounded-xl"
+                  )}
+                  style={theater ? { height: "min(85vh, 56.25vw)" } : undefined}
+                >
+                  <div ref={hostRef} className="h-full w-full" />
+
+                  {/*
+                    Event-capture overlay: the cross-origin YouTube iframe is
+                    out-of-process and never reports mouse movement to this
+                    page, so a transparent layer above it drives hover
+                    detection, click-to-pause and double-click fullscreen.
+                    Playback itself is driven through the IFrame API.
+                  */}
+                  <div
+                    className={cn("absolute inset-0", !show && "cursor-none")}
+                    onMouseEnter={() => setHover(true)}
+                    onMouseMove={onOverlayMouseMove}
+                    onMouseLeave={onShellMouseLeave}
+                    onClick={onShellClick}
+                    onDoubleClick={onShellDoubleClick}
+                  >
+                    {/* Hover-only control bar — YouTube-style. The bar lives
+                        inside the overlay so moving onto it keeps controls up. */}
+                    <div
+                      data-ct-bar
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      className={cn(
+                        "absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/40 to-transparent pb-1 pt-8 transition-opacity duration-200",
+                        show ? "opacity-100" : "pointer-events-none opacity-0"
+                      )}
+                    >
+                    <div className="px-3">
+                      <input
+                        type="range"
+                        min={0}
+                        max={1000}
+                        step={1}
+                        aria-label="Seek"
+                        className="ct-range h-1 w-full"
+                        style={{ background: seekGrad }}
+                        value={Math.round((scrub ?? (dur ? cur / dur : 0)) * 1000)}
+                        onChange={(e) => {
+                          const frac = Number(e.target.value) / 1000;
+                          setScrub(frac);
+                          seekTo(frac);
+                        }}
+                        onPointerDown={() => {
+                          if (touchRef.current) setTouchUi(true);
+                        }}
+                        onPointerUp={() => setScrub(null)}
+                        onKeyUp={() => setScrub(null)}
+                        onBlur={() => setScrub(null)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-0.5 px-1.5 text-white">
+                      <button
+                        onClick={togglePlay}
+                        aria-label={pstate === 1 ? "Pause" : "Play"}
+                        className="ct-cbtn"
+                      >
+                        {pstate === 1 ? (
+                          <Pause className="h-5 w-5" />
+                        ) : (
+                          <Play className="h-5 w-5" />
+                        )}
+                      </button>
+                      <button
+                        onClick={toggleMute}
+                        aria-label={muted ? "Unmute" : "Mute"}
+                        className="ct-cbtn"
+                      >
+                        {muted || vol === 0 ? (
+                          <VolumeX className="h-5 w-5" />
+                        ) : vol < 50 ? (
+                          <Volume1 className="h-5 w-5" />
+                        ) : (
+                          <Volume2 className="h-5 w-5" />
+                        )}
+                      </button>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        aria-label="Volume"
+                        className="ct-range h-1 w-16"
+                        style={{ background: volGrad }}
+                        value={muted ? 0 : vol}
+                        onChange={(e) => changeVol(Number(e.target.value))}
+                      />
+                      <span className="ml-1.5 text-xs tabular-nums text-white/90">
+                        {fmtDur(scrub !== null ? scrub * dur : cur) || "0:00"} /{" "}
+                        {fmtDur(dur) || "0:00"}
+                      </span>
+                      <div className="ml-auto flex items-center gap-0.5">
+                        <button
+                          onClick={() => onTheaterChange(!theater)}
+                          aria-pressed={theater}
+                          title="Theater mode (t)"
+                          aria-label="Theater mode"
+                          className="ct-cbtn"
+                        >
+                          <RectangleHorizontal className="h-5 w-5" />
+                        </button>
+                        <button
+                          onClick={toggleFs}
+                          aria-label={fs ? "Exit fullscreen" : "Fullscreen"}
+                          title="Fullscreen (f)"
+                          className="ct-cbtn"
+                        >
+                          {fs ? (
+                            <Minimize className="h-5 w-5" />
+                          ) : (
+                            <Maximize className="h-5 w-5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  </div>
+
+                  {pstate === 3 && (
+                    <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/25 border-t-white" />
+                    </div>
+                  )}
+                  {(pstate === -1 || pstate === 5) && (
+                    <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                      <div className="grid h-16 w-16 place-items-center rounded-full bg-black/60 text-white">
+                        <Play className="h-7 w-7 translate-x-0.5" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <h1
               className={cn(
                 "text-lg font-semibold leading-snug",

@@ -73,6 +73,11 @@ export function useYTPlayer(opts: PlayerOpts) {
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
+          // Native chrome off: WatchView renders its own control bar that only
+          // shows while hovering (and auto-hides during idle playback).
+          controls: 0,
+          disablekb: 1,
+          iv_load_policy: 3,
         },
         events: {
           onStateChange: (e: any) => {

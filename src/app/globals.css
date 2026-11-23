@@ -152,3 +152,46 @@
     animation: none;
   }
 }
+
+/* ---------- player control bar (hover-only chrome) ---------- */
+.ct-range {
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 999px;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.ct-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+.ct-range::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+.ct-range:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+}
+.ct-cbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 8px;
+  color: #fff;
+}
+.ct-cbtn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.ct-cbtn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+}
