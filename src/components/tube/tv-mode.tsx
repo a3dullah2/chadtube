@@ -30,6 +30,10 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const [osdVisible, setOsdVisible] = useState(true);
   const [progress, setProgress] = useState({ cur: 0, dur: 0 });
   const [pendingDeadline, setPendingDeadline] = useState<number | null>(null);
+  // Leaving an ENDED video: the old end screen lingers in the iframe while
+  // the next one buffers — keep the overlay up (with a spinner) until the
+  // new video actually plays.
+  const [swapping, setSwapping] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const safeIdx = ((idx % queue.length) + queue.length) % Math.max(queue.length, 1);
@@ -47,7 +51,10 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
     [queue.length]
   );
 
-  const advance = useCallback(() => goTo(safeIdx + 1), [goTo, safeIdx]);
+  const advance = useCallback(() => {
+    if (pendingDeadline !== null) setSwapping(true);
+    goTo(safeIdx + 1);
+  }, [goTo, safeIdx, pendingDeadline]);
   const advanceRef = useRef(advance);
   useEffect(() => {
     advanceRef.current = advance;
@@ -57,6 +64,9 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const { hostRef, playerRef } = useYTPlayer({
     videoId: video?.id ?? "",
     autoplay: true,
+    onState: (s) => {
+      if (s === 1 || s === 2) setSwapping(false); // new video is on screen
+    },
     onEnd: () => {
       firedRef.current = false;
       setPendingDeadline(Date.now() + 5000);
@@ -341,42 +351,51 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
         </div>
       </div>
 
-      {/* Up-next countdown overlay */}
-      {pendingDeadline !== null && nextVid && (
+      {/* Up-next countdown overlay / swap cover */}
+      {(pendingDeadline !== null || swapping) && nextVid && (
         <div className="absolute inset-0 z-40 grid place-items-center bg-black">
-          <div className="flex flex-col items-center gap-4 text-center">
-            <p className="text-sm uppercase tracking-widest text-white/60">
-              Up next in {countdown}s
-            </p>
-            <div className="flex items-center gap-4">
-              <img
-                src={thumbUrl(nextVid.id, true)}
-                alt=""
-                className="w-52 rounded-lg"
-              />
-              <div className="max-w-sm text-left">
-                <p className="line-clamp-2 font-semibold">{nextVid.t}</p>
-                <p className="mt-1 text-sm text-white/60">
-                  {metaJoin(chanName(nextVid, channels), fmtViews(nextVid.v))}
-                </p>
+          {pendingDeadline !== null ? (
+            <div className="flex flex-col items-center gap-4 text-center">
+              <p className="text-sm uppercase tracking-widest text-white/60">
+                Up next in {countdown}s
+              </p>
+              <div className="flex items-center gap-4">
+                <img
+                  src={thumbUrl(nextVid.id, true)}
+                  alt=""
+                  className="w-52 rounded-lg"
+                />
+                <div className="max-w-sm text-left">
+                  <p className="line-clamp-2 font-semibold">{nextVid.t}</p>
+                  <p className="mt-1 text-sm text-white/60">
+                    {metaJoin(chanName(nextVid, channels), fmtViews(nextVid.v))}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  onClick={advance}
+                  className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
+                >
+                  <Play className="h-4 w-4" /> Play now
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setPendingDeadline(null)}
+                  className="border-white/30 bg-transparent text-white hover:bg-white/10"
+                >
+                  Stay here
+                </Button>
               </div>
             </div>
-            <div className="flex gap-3">
-              <Button
-                onClick={advance}
-                className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
-              >
-                <Play className="h-4 w-4" /> Play now
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setPendingDeadline(null)}
-                className="border-white/30 bg-transparent text-white hover:bg-white/10"
-              >
-                Stay here
-              </Button>
+          ) : (
+            <div className="flex flex-col items-center gap-4">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
+              <p className="text-sm uppercase tracking-widest text-white/60">
+                Loading…
+              </p>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

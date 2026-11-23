@@ -56,6 +56,11 @@ export function WatchView({
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endIntRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  // True while we are leaving an ENDED video and the next one is still
+  // buffering. An opaque cover stays up for this window — otherwise the
+  // previous video's YouTube end screen (share / watch-later / "More
+  // videos" / logo) leaks through for a few seconds at the start.
+  const [swapping, setSwapping] = useState(false);
 
   // ----- custom player chrome (hover-only controls) -----
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +119,7 @@ export function WatchView({
 
   const replay = () => {
     clearEnd();
+    setSwapping(true); // cover the old end screen while it re-buffers
     const p = playerRef.current;
     try {
       p?.seekTo(0, true);
@@ -123,9 +129,13 @@ export function WatchView({
     }
   };
 
-  const playNextNow = () => {
+  // Navigate to another video. When the current one has ENDED, raise the
+  // swap cover: loadVideoById keeps the old iframe content (end screen
+  // included) visible until the new video's first frame renders.
+  const selectVideo = (v: Vid) => {
+    if (pstateRef.current === 0) setSwapping(true);
     clearEnd();
-    if (next) onSelect(next);
+    onSelect(v);
   };
 
   const togglePlay = () => {
@@ -239,6 +249,7 @@ export function WatchView({
     onState: (s) => {
       pstateRef.current = s;
       setPstate(s);
+      if (s === 1 || s === 2) setSwapping(false); // new video is on screen
       if (s === 1) scheduleHide();
       else {
         cancelHide();
@@ -254,7 +265,7 @@ export function WatchView({
         }, 1000);
         endRef.current = setTimeout(() => {
           clearEnd();
-          onSelect(next);
+          selectVideo(next);
         }, 5000);
       }
     },
@@ -387,7 +398,7 @@ export function WatchView({
           {next && (
             <Button
               size="sm"
-              onClick={() => onSelect(next)}
+              onClick={() => selectVideo(next)}
               className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
             >
               Next <SkipForward className="h-4 w-4" />
@@ -562,7 +573,21 @@ export function WatchView({
                     </div>
                   )}
 
-                  {pstate === 0 && (
+                  {swapping && (pstate === 0 || pstate === 3) && (
+                    /* Swap cover: the previous video's YouTube end screen stays
+                       rendered inside the iframe until the next video's first
+                       frame — keep everything hidden while buffering. */
+                    <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">
+                      <div className="flex flex-col items-center gap-4">
+                        <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
+                        <div className="text-xs uppercase tracking-widest text-white/60">
+                          Loading…
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {pstate === 0 && !swapping && (
                     /* Opaque end card: fully covers YouTube's own end screen
                        (share / watch-later buttons, "More videos" row, logo). */
                     <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">
@@ -575,7 +600,7 @@ export function WatchView({
                                 : "Up next"}
                             </div>
                             <button
-                              onClick={playNextNow}
+                              onClick={() => selectVideo(next)}
                               className="w-[440px] max-w-[85vw] rounded-xl bg-white/10 p-4 text-left transition hover:bg-white/15"
                             >
                               <div className="line-clamp-2 font-medium">
@@ -591,7 +616,7 @@ export function WatchView({
                           {next && (
                             <Button
                               size="sm"
-                              onClick={playNextNow}
+                              onClick={() => selectVideo(next)}
                               className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
                             >
                               <SkipForward className="h-4 w-4" /> Play now
@@ -664,7 +689,7 @@ export function WatchView({
                 {upNext.map((u) => (
                   <button
                     key={u.id}
-                    onClick={() => onSelect(u)}
+                    onClick={() => selectVideo(u)}
                     className="w-64 shrink-0 rounded-lg p-2 text-left hover:bg-accent"
                   >
                     <div className="relative aspect-video w-full overflow-hidden rounded-md bg-muted">
@@ -705,7 +730,7 @@ export function WatchView({
                   {upNext.map((u) => (
                     <button
                       key={u.id}
-                      onClick={() => onSelect(u)}
+                      onClick={() => selectVideo(u)}
                       className="flex gap-3 rounded-lg p-2 text-left hover:bg-accent"
                     >
                       <div className="relative aspect-video w-36 shrink-0 overflow-hidden rounded-md bg-muted">
