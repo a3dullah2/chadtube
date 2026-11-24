@@ -25,17 +25,10 @@ const YT_PLAYING = 1;
 
 export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const [idx, setIdx] = useState(startIndex);
-  const [pstate, setPstate] = useState(-1); // real YT player state
   const [muted, setMuted] = useState(false);
   const [osdVisible, setOsdVisible] = useState(true);
   const [progress, setProgress] = useState({ cur: 0, dur: 0 });
   const [pendingDeadline, setPendingDeadline] = useState<number | null>(null);
-  // A video is loading and has not played its first frame yet. The reused
-  // iframe keeps painting the previous video's last frame (or, if it ended,
-  // its YouTube end screen) through the unstarted/cued/buffering states —
-  // cover all of it, from mount and from every navigation, until the video
-  // actually plays.
-  const [swapping, setSwapping] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const safeIdx = ((idx % queue.length) + queue.length) % Math.max(queue.length, 1);
@@ -46,11 +39,6 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
   const goTo = useCallback(
     (i: number) => {
       setPendingDeadline(null);
-      // Raise the swap cover before switching: loadVideoById keeps the old
-      // video's last frame / YouTube end screen / pause overlay visible
-      // until the new one buffers (onState clears it once it plays).
-      playedRef.current = false;
-      setSwapping(true);
       setIdx(((i % queue.length) + queue.length) % queue.length);
       setProgress({ cur: 0, dur: 0 });
     },
@@ -65,24 +53,10 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
     advanceRef.current = advance;
   });
   const firedRef = useRef(false);
-  const playedRef = useRef(false); // current video has actually started playing
-  const pstateRef = useRef(-1); // mirror of pstate for prev-state tracking
-  const prevStateRef = useRef(-1); // player state before the current one
 
   const { hostRef, playerRef } = useYTPlayer({
     videoId: video?.id ?? "",
     autoplay: true,
-    onState: (s) => {
-      prevStateRef.current = pstateRef.current;
-      pstateRef.current = s;
-      setPstate(s);
-      if (s === 1) {
-        playedRef.current = true;
-        setSwapping(false); // new video is on screen
-      } else if (s === 2 && playedRef.current) {
-        setSwapping(false); // user paused an already-started video
-      }
-    },
     onEnd: () => {
       firedRef.current = false;
       setPendingDeadline(Date.now() + 5000);
@@ -254,9 +228,17 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
       role="dialog"
       aria-label="TV mode"
     >
-      {/* Player */}
+      {/* Player. A fresh iframe is mounted for every video (see use-yt), so
+          the previous video's end screen can never linger. The thumbnail
+          underneath fills the split second before the new iframe paints. */}
       <div className="absolute inset-0">
-        <div ref={hostRef} className="h-full w-full" />
+        <img
+          key={video.id}
+          src={thumbUrl(video.id, true)}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        <div ref={hostRef} className="absolute inset-0 h-full w-full" />
       </div>
 
       {/* Click catcher: swallows iframe focus, click toggles play */}
@@ -265,39 +247,6 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
         onClick={toggle}
         aria-label="Toggle playback"
       />
-
-      {/* Paused cover: YouTube paints its own pause overlay (center play
-          button, share / watch-later, "More videos", logo) over a paused
-          embed and there is no playerVar to disable it — cover it with the
-          video's poster + our play glyph instead. z-[15]: above the click
-          catcher (clicks pass through it, click = resume), below the OSD. */}
-      {(pstate === 2 || (pstate === 3 && prevStateRef.current === 2)) && (
-        <div className="pointer-events-none absolute inset-0 z-[15]">
-          <img
-            key={video.id}
-            src={`https://i.ytimg.com/vi/${video.id}/maxresdefault.jpg`}
-            onError={(e) => {
-              const img = e.currentTarget;
-              const step = Number(img.dataset.pstep ?? 0);
-              if (step === 0) {
-                img.dataset.pstep = "1";
-                img.src = `https://i.ytimg.com/vi/${video.id}/hq720.jpg`;
-              } else if (step === 1) {
-                img.dataset.pstep = "2";
-                img.src = thumbUrl(video.id, true);
-              }
-            }}
-            alt=""
-            className="h-full w-full object-cover"
-          />
-          <div className="absolute inset-0 bg-black/40" />
-          <div className="absolute inset-0 grid place-items-center">
-            <div className="grid h-16 w-16 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/30">
-              <Play className="h-7 w-7 translate-x-0.5" />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Top bar */}
       <div
@@ -386,54 +335,42 @@ export function TvMode({ queue, channels, startIndex, onExit }: TvModeProps) {
         </div>
       </div>
 
-      {/* Up-next countdown overlay / swap cover */}
-      {(pendingDeadline !== null || swapping) && nextVid && (
+      {/* Up-next countdown overlay (only after the video actually ended) */}
+      {pendingDeadline !== null && nextVid && (
         <div className="absolute inset-0 z-40 grid place-items-center bg-black">
-          {pendingDeadline !== null ? (
-            <div className="flex flex-col items-center gap-4 text-center">
-              <p className="text-sm uppercase tracking-widest text-white/60">
-                Up next in {countdown}s
-              </p>
-              <div className="flex items-center gap-4">
-                <img
-                  src={thumbUrl(nextVid.id, true)}
-                  alt=""
-                  className="w-52 rounded-lg"
-                />
-                <div className="max-w-sm text-left">
-                  <p className="line-clamp-2 font-semibold">{nextVid.t}</p>
-                  <p className="mt-1 text-sm text-white/60">
-                    {metaJoin(chanName(nextVid, channels), fmtViews(nextVid.v))}
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <Button
-                  onClick={advance}
-                  className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
-                >
-                  <Play className="h-4 w-4" /> Play now
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setPendingDeadline(null)}
-                  className="border-white/30 bg-transparent text-white hover:bg-white/10"
-                >
-                  Stay here
-                </Button>
+          <div className="flex flex-col items-center gap-4 text-center">
+            <p className="text-sm uppercase tracking-widest text-white/60">
+              Up next in {countdown}s
+            </p>
+            <div className="flex items-center gap-4">
+              <img
+                src={thumbUrl(nextVid.id, true)}
+                alt=""
+                className="w-52 rounded-lg"
+              />
+              <div className="max-w-sm text-left">
+                <p className="line-clamp-2 font-semibold">{nextVid.t}</p>
+                <p className="mt-1 text-sm text-white/60">
+                  {metaJoin(chanName(nextVid, channels), fmtViews(nextVid.v))}
+                </p>
               </div>
             </div>
-          ) : (
-            <div
-              className="flex flex-col items-center gap-4"
-              onClick={toggle} // loading cover is clickable in case autoplay is blocked
-            >
-              <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
-              <p className="text-sm uppercase tracking-widest text-white/60">
-                Loading…
-              </p>
+            <div className="flex gap-3">
+              <Button
+                onClick={advance}
+                className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
+              >
+                <Play className="h-4 w-4" /> Play now
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setPendingDeadline(null)}
+                className="border-white/30 bg-transparent text-white hover:bg-white/10"
+              >
+                Stay here
+              </Button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>

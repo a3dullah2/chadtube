@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Maximize,
@@ -56,14 +56,6 @@ export function WatchView({
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const endIntRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
-  // True while a video is loading and until its first frame actually plays.
-  // The YouTube iframe is REUSED across videos (loadVideoById), and it keeps
-  // painting the previous video's last frame — or, if that one ended, its
-  // full end screen (share / watch-later / "More videos" / logo) — through
-  // the unstarted(-1), cued(5) and buffering(3) states. An opaque cover
-  // hides all of that; it starts true so even the very first video opens on
-  // a clean loading screen instead of stale iframe content.
-  const [swapping, setSwapping] = useState(true);
 
   // ----- custom player chrome (hover-only controls) -----
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -71,8 +63,6 @@ export function WatchView({
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchRef = useRef(false);
   const pstateRef = useRef(-1);
-  const prevStateRef = useRef(-1); // player state before the current one
-  const playedRef = useRef(false); // current video has actually started playing
   const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
@@ -124,7 +114,6 @@ export function WatchView({
 
   const replay = () => {
     clearEnd();
-    setSwapping(true); // cover the old end screen while it re-buffers
     const p = playerRef.current;
     try {
       p?.seekTo(0, true);
@@ -134,13 +123,10 @@ export function WatchView({
     }
   };
 
-  // Navigate to another video. Always raise the swap cover: loadVideoById
-  // keeps the old iframe content — end screen if the video had ended, else
-  // its last frame — visible until the new video's first frame renders.
-  // (The [video.id] effect below raises it too; this covers the same-tick
-  // render so the end card never flashes on the way out.)
+  // Navigate to another video. The player is destroyed and recreated for the
+  // new id (see use-yt), so the old iframe — including any end screen it was
+  // showing — disappears instantly. No cover layers required.
   const selectVideo = (v: Vid) => {
-    setSwapping(true);
     clearEnd();
     onSelect(v);
   };
@@ -254,15 +240,11 @@ export function WatchView({
     videoId: video.id,
     autoplay: true,
     onState: (s) => {
-      prevStateRef.current = pstateRef.current;
       pstateRef.current = s;
       setPstate(s);
       if (s === 1) {
-        playedRef.current = true;
-        setSwapping(false); // the new video's first frame is on screen
         scheduleHide();
       } else {
-        if (s === 2 && playedRef.current) setSwapping(false);
         cancelHide();
         setControlsHidden(false); // paused/buffering/ended -> show while hovered
       }
@@ -292,14 +274,12 @@ export function WatchView({
 
   // A pending auto-advance belongs to the video that just ended — navigating
   // to any other video must cancel it instead of hijacking the navigation.
-  // Every video change also re-raises the swap cover: the reused iframe keeps
-  // showing the old video's end screen / last frame through the -1/5/3 load
-  // states until the new one actually plays (onState clears it then; a user
-  // pause of an already-started video clears it too).
-  useEffect(() => {
+  // Resetting pstate to unstarted also hides the ended end card BEFORE the
+  // navigation paints (useLayoutEffect), so it can never flash for a frame
+  // with the new video's id.
+  useLayoutEffect(() => {
     clearEnd();
-    playedRef.current = false;
-    setSwapping(true);
+    setPstate(-1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video.id]);
 
@@ -441,13 +421,6 @@ export function WatchView({
           <div className="min-w-0">
             {(() => {
               const show = (hover || touchUi) && !controlsHidden;
-              // Paused (or paused-then-rebuffering): YouTube paints its own
-              // pause overlay (center play button, share / watch-later,
-              // "More videos" row, logo) over a paused embed and offers no
-              // playerVar to turn it off — so a paused embed is never shown;
-              // it is covered by the poster + our own play glyph instead.
-              const coverPaused =
-                pstate === 2 || (pstate === 3 && prevStateRef.current === 2);
               const playedPct = dur ? (scrub ?? cur / dur) * 100 : 0;
               const bufPct = Math.max(playedPct, buf * 100);
               const seekGrad = `linear-gradient(to right, #e5484d 0%, #e5484d ${playedPct}%, rgba(255,255,255,.55) ${playedPct}%, rgba(255,255,255,.55) ${bufPct}%, rgba(255,255,255,.25) ${bufPct}%)`;
@@ -462,7 +435,17 @@ export function WatchView({
                   )}
                   style={theater ? { height: "min(85vh, 56.25vw)" } : undefined}
                 >
-                  <div ref={hostRef} className="h-full w-full" />
+                  {/* Poster UNDER the player: during the split second a fresh
+                      iframe needs to spin up after a navigation, the area
+                      shows the new video's own thumbnail instead of a black
+                      hole. The iframe paints over it as soon as it renders. */}
+                  <img
+                    key={video.id}
+                    src={thumbUrl(video.id, true)}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                  <div ref={hostRef} className="absolute inset-0 h-full w-full" />
 
                   {/*
                     Event-capture overlay: the cross-origin YouTube iframe is
@@ -584,81 +567,7 @@ export function WatchView({
                   </div>
                   </div>
 
-                  {coverPaused && (
-                    /* Paused cover — the video's poster (maxres → hq720 →
-                       hqdefault fallback chain) dimmed, with our own play
-                       button. Sits at z-[5]: above the iframe (hiding YouTube's
-                       pause overlay) but below the control bar (z-10), which
-                       stays usable while paused. pointer-events-none keeps
-                       every click hitting the overlay below (click = resume). */
-                    <div className="pointer-events-none absolute inset-0 z-[5]">
-                      <img
-                        key={video.id}
-                        src={`https://i.ytimg.com/vi/${video.id}/maxresdefault.jpg`}
-                        onError={(e) => {
-                          const img = e.currentTarget;
-                          const step = Number(img.dataset.pstep ?? 0);
-                          if (step === 0) {
-                            img.dataset.pstep = "1";
-                            img.src = `https://i.ytimg.com/vi/${video.id}/hq720.jpg`;
-                          } else if (step === 1) {
-                            img.dataset.pstep = "2";
-                            img.src = thumbUrl(video.id, true);
-                          }
-                        }}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/40" />
-                      <div className="absolute inset-0 grid place-items-center">
-                        <div className="grid h-16 w-16 place-items-center rounded-full bg-black/55 text-white ring-1 ring-white/30">
-                          <Play className="h-7 w-7 translate-x-0.5" />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {pstate === 3 && (
-                    <div className="pointer-events-none absolute inset-0 grid place-items-center">
-                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/25 border-t-white" />
-                    </div>
-                  )}
-                  {(pstate === -1 || pstate === 5) && (
-                    <div className="pointer-events-none absolute inset-0 grid place-items-center">
-                      <div className="grid h-16 w-16 place-items-center rounded-full bg-black/60 text-white">
-                        <Play className="h-7 w-7 translate-x-0.5" />
-                      </div>
-                    </div>
-                  )}
-
-                  {swapping && pstate !== 1 && (
-                    /* Swap cover: until the new video's first frame renders,
-                       the reused iframe still paints the previous video's
-                       YouTube end screen (share / "More videos" / logo), its
-                       last frame, or its PAUSE overlay if the user navigated
-                       while paused. Cover EVERY non-playing state — unstarted
-                       (-1), cued (5), buffering (3), paused (2), ended (0)
-                       mid-swap: YT walks through -1/5 on loadVideoById and
-                       the old content leaks exactly there. Clicks pass
-                       through to the shell so the video can still be started
-                       by hand if autoplay is blocked. */
-                    <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center bg-black text-white">
-                      {pstate === 0 || pstate === 3 ? (
-                        <div className="flex flex-col items-center gap-4">
-                          <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/25 border-t-white" />
-                          <div className="text-xs uppercase tracking-widest text-white/60">
-                            Loading…
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/25">
-                          <Play className="h-7 w-7 translate-x-0.5" />
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {pstate === 0 && !swapping && (
+                  {pstate === 0 && (
                     /* Opaque end card: fully covers YouTube's own end screen
                        (share / watch-later buttons, "More videos" row, logo). */
                     <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">

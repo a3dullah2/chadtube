@@ -43,6 +43,13 @@ export interface PlayerOpts {
  * Mount a YouTube IFrame player into a div.
  * The host div must live inside a sized container (e.g. aspect-video).
  * A plain mount div is managed manually so React never fights the iframe swap.
+ *
+ * A FRESH player is created for every videoId. Reusing one iframe via
+ * loadVideoById keeps painting the previous video's last frame — or its whole
+ * YouTube end screen — until the new video's first frame decodes, which
+ * leaked for seconds after every navigation. Destroying the iframe removes
+ * that stale content instantly; the new one starts on its own thumbnail,
+ * exactly like a fresh embed. No cover layers needed anywhere.
  */
 export function useYTPlayer(opts: PlayerOpts) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -57,6 +64,8 @@ export function useYTPlayer(opts: PlayerOpts) {
     let player: any = null;
     const host = hostRef.current;
     if (!host) return;
+    // A new mount div per player: YT.Player consumes the element it is given
+    // (replaces it with the iframe) and destroy() does not restore it.
     const mount = document.createElement("div");
     mount.style.width = "100%";
     mount.style.height = "100%";
@@ -73,8 +82,7 @@ export function useYTPlayer(opts: PlayerOpts) {
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
-          // Native chrome off: WatchView renders its own control bar that only
-          // shows while hovering (and auto-hides during idle playback).
+          // Native chrome off: the app renders its own hover control bar.
           controls: 0,
           disablekb: 1,
           iv_load_policy: 3,
@@ -96,24 +104,11 @@ export function useYTPlayer(opts: PlayerOpts) {
       } catch {
         /* noop */
       }
-      playerRef.current = null;
+      if (playerRef.current === player) playerRef.current = null;
       host.innerHTML = "";
     };
-  }, []);
-
-  // Swap videos without remounting the player.
-  const vidRef = useRef(opts.videoId);
-  useEffect(() => {
-    if (vidRef.current === opts.videoId) return;
-    vidRef.current = opts.videoId;
-    const p = playerRef.current;
-    if (p && typeof p.loadVideoById === "function") {
-      try {
-        p.loadVideoById(opts.videoId);
-      } catch {
-        /* not ready yet */
-      }
-    }
+    // Re-create the whole player whenever the video changes (see doc above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.videoId]);
 
   return { hostRef, playerRef };
