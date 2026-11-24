@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "ChadTube — your personal nerd TV",
   description:
-    "A personal, algorithm-free video site: curated channels, thousands of videos, and a TV mode for lean-back watching.",
-  keywords: ["ChadTube", "TV mode", "curated", "YouTube", "nerd TV"],
+    "A personal, algorithm-free video site: curated channels and thousands of videos.",
+  keywords: ["ChadTube", "curated", "YouTube", "nerd TV"],
 };
 
 export default function RootLayout({

@@ -9,7 +9,6 @@ import {
   Moon,
   Search,
   Sun,
-  Tv,
   X,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -26,7 +25,6 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { TvMode } from "./tv-mode";
 import { WatchView } from "./watch-view";
 import type { Chan, HistEntry, SortMode, Tier, TubeData, Vid } from "./types";
 import {
@@ -62,15 +60,12 @@ export function TubeApp() {
   const [sort, setSort] = useState<SortMode>("newest");
   const [seed, setSeed] = useState(1);
   // Pakistani mode: hide Pakistani news & Islamic channels (Dunya News, the
-  // Ghamidi circle, SAMAA/Geo reposts, ...) from feed, search and TV queue.
+  // Ghamidi circle, SAMAA/Geo reposts, ...) from feed and search.
   const [pkMode, setPkMode] = useState(false);
   // Theater mode: edge-to-edge player on the watch page (YouTube-style).
   const [theater, setTheater] = useState(false);
   const [visible, setVisible] = useState(PAGE);
   const [drawer, setDrawer] = useState(false);
-  const [tv, setTv] = useState(false);
-  const [tvQueue, setTvQueue] = useState<Vid[]>([]);
-  const [tvStart, setTvStart] = useState(0);
   const [hist, setHist] = useState<HistEntry[]>([]);
   const [autoplay, setAutoplay] = useState(true);
   const [mounted, setMounted] = useState(false);
@@ -244,24 +239,6 @@ export function TubeApp() {
     });
   }, [filtered.length, toast]);
 
-  const openTv = useCallback(
-    (startIdx?: number) => {
-      const list = view === "watch" && queue.length ? queue : filtered;
-      if (!list.length) {
-        toast({ title: "Nothing to play", description: "No videos match the current filters." });
-        return;
-      }
-      setTvQueue(list);
-      setTvStart(
-        startIdx !== undefined && startIdx >= 0
-          ? startIdx
-          : Math.floor(Math.random() * list.length)
-      );
-      setTv(true);
-    },
-    [view, queue, filtered, toast]
-  );
-
   const goHome = useCallback(() => {
     setView("home");
     setDrawer(false);
@@ -304,10 +281,6 @@ export function TubeApp() {
           setChan(null);
           applyFilter();
           goHome();
-          onNavigate?.();
-        })}
-        {navItem(<Tv className="h-4 w-4" />, "TV mode", false, () => {
-          openTv();
           onNavigate?.();
         })}
         {navItem(<History className="h-4 w-4" />, "History", view === "history", () => {
@@ -473,22 +446,6 @@ export function TubeApp() {
               <History className="h-5 w-5" />
             </Button>
             <Button
-              size="sm"
-              onClick={() => openTv()}
-              className="hidden gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41] sm:inline-flex"
-            >
-              <Tv className="h-4 w-4" /> TV mode
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="sm:hidden"
-              onClick={() => openTv()}
-              aria-label="TV mode"
-            >
-              <Tv className="h-5 w-5" />
-            </Button>
-            <Button
               variant="ghost"
               size="icon"
               onClick={togglePk}
@@ -560,6 +517,11 @@ export function TubeApp() {
         <main className="min-w-0 flex-1">
           {view === "watch" && current && data ? (
             <WatchView
+              /* key: a brand-new iframe per video. Reusing one iframe across
+                 watch->watch navigation (loadVideoById) keeps the previous
+                 video's end screen painted inside it until the new video's
+                 first frame — remounting starts every video clean. */
+              key={current.id}
               video={current}
               queue={queue}
               channels={channels}
@@ -569,9 +531,6 @@ export function TubeApp() {
               onTheaterChange={changeTheater}
               onBack={goHome}
               onSelect={openInQueue}
-              onTv={() =>
-                openTv(Math.max(0, queue.findIndex((v) => v.id === current.id)))
-              }
             />
           ) : view === "history" ? (
             <div className="mx-auto max-w-4xl px-4 py-4">
@@ -777,16 +736,6 @@ export function TubeApp() {
           </span>
         </div>
       </footer>
-
-      {/* TV mode overlay */}
-      {tv && (
-        <TvMode
-          queue={tvQueue}
-          channels={channels}
-          startIndex={tvStart}
-          onExit={() => setTv(false)}
-        />
-      )}
     </div>
   );
 }

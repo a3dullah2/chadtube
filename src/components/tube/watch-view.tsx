@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Maximize,
@@ -9,7 +9,6 @@ import {
   Play,
   RectangleHorizontal,
   SkipForward,
-  Tv,
   Volume1,
   Volume2,
   VolumeX,
@@ -33,7 +32,6 @@ interface WatchViewProps {
   onTheaterChange: (v: boolean) => void;
   onBack: () => void;
   onSelect: (v: Vid) => void;
-  onTv: () => void;
 }
 
 export function WatchView({
@@ -46,7 +44,6 @@ export function WatchView({
   onTheaterChange,
   onBack,
   onSelect,
-  onTv,
 }: WatchViewProps) {
   const idx = queue.findIndex((v) => v.id === video.id);
   const next =
@@ -64,6 +61,10 @@ export function WatchView({
   const touchRef = useRef(false);
   const pstateRef = useRef(-1);
   const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
+  const bufTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True only once buffering has persisted (or followed a pause). Used to
+  // drop the opaque buffering cover over quick scrub hiccups.
+  const [bufVeil, setBufVeil] = useState(false);
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
   const [buf, setBuf] = useState(0);
@@ -123,12 +124,9 @@ export function WatchView({
     }
   };
 
-  // Navigate to another video. The player is destroyed and recreated for the
-  // new id (see use-yt), so the old iframe — including any end screen it was
-  // showing — disappears instantly. No cover layers required.
-  const selectVideo = (v: Vid) => {
+  const playNextNow = () => {
     clearEnd();
-    onSelect(v);
+    if (next) onSelect(next);
   };
 
   const togglePlay = () => {
@@ -139,6 +137,37 @@ export function WatchView({
       else p.playVideo();
     } catch {
       /* not ready */
+    }
+  };
+
+  // Single authority for player-state transitions (used by the YT event AND
+  // by the 250ms poll as a safety net, so a missed onStateChange can never
+  // leave YouTube's own panel uncovered).
+  const applyState = (s: number) => {
+    const prev = pstateRef.current;
+    if (s === prev) return;
+    pstateRef.current = s;
+    setPstate(s);
+    if (s === 1) scheduleHide();
+    else {
+      cancelHide();
+      setControlsHidden(false); // paused/buffering/ended -> show while hovered
+    }
+    if (s === 3) {
+      // Buffering window: YouTube paints its own chrome over the frozen
+      // frame here. If the buffer follows a pause, cover it instantly (the
+      // pause veil is already up — the panel must never re-flash); if it is
+      // a mid-playback seek/hiccup, wait 250ms so quick scrubs never flash
+      // black, and only sustained buffering gets the cover.
+      if (bufTimer.current) clearTimeout(bufTimer.current);
+      if (prev === 2) setBufVeil(true);
+      else bufTimer.current = setTimeout(() => setBufVeil(true), 250);
+    } else {
+      if (bufTimer.current) {
+        clearTimeout(bufTimer.current);
+        bufTimer.current = null;
+      }
+      setBufVeil(false);
     }
   };
 
@@ -240,14 +269,7 @@ export function WatchView({
     videoId: video.id,
     autoplay: true,
     onState: (s) => {
-      pstateRef.current = s;
-      setPstate(s);
-      if (s === 1) {
-        scheduleHide();
-      } else {
-        cancelHide();
-        setControlsHidden(false); // paused/buffering/ended -> show while hovered
-      }
+      applyState(s);
     },
     onEnd: () => {
       if (autoplay && next) {
@@ -258,7 +280,7 @@ export function WatchView({
         }, 1000);
         endRef.current = setTimeout(() => {
           clearEnd();
-          selectVideo(next);
+          onSelect(next);
         }, 5000);
       }
     },
@@ -274,12 +296,8 @@ export function WatchView({
 
   // A pending auto-advance belongs to the video that just ended — navigating
   // to any other video must cancel it instead of hijacking the navigation.
-  // Resetting pstate to unstarted also hides the ended end card BEFORE the
-  // navigation paints (useLayoutEffect), so it can never flash for a frame
-  // with the new video's id.
-  useLayoutEffect(() => {
+  useEffect(() => {
     clearEnd();
-    setPstate(-1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video.id]);
 
@@ -300,6 +318,10 @@ export function WatchView({
         setMuted(!!p.isMuted?.());
         const v = p.getVolume?.();
         if (typeof v === "number") setVol(v);
+        // Safety net: if the iframe's onStateChange event was ever missed,
+        // reconcile from the player itself so a cover can't stay dropped.
+        const st = p.getPlayerState?.();
+        if (typeof st === "number") applyState(st);
       } catch {
         /* player mid-swap */
       }
@@ -311,6 +333,7 @@ export function WatchView({
       document.removeEventListener("fullscreenchange", onFs);
       if (idleTimer.current) clearTimeout(idleTimer.current);
       if (clickTimer.current) clearTimeout(clickTimer.current);
+      if (bufTimer.current) clearTimeout(bufTimer.current);
     };
   }, []);
 
@@ -389,13 +412,10 @@ export function WatchView({
           >
             <RectangleHorizontal className="h-4 w-4" /> Theater
           </Button>
-          <Button variant="outline" size="sm" onClick={onTv} className="gap-2">
-            <Tv className="h-4 w-4" /> TV mode
-          </Button>
           {next && (
             <Button
               size="sm"
-              onClick={() => selectVideo(next)}
+              onClick={() => onSelect(next)}
               className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
             >
               Next <SkipForward className="h-4 w-4" />
@@ -435,17 +455,7 @@ export function WatchView({
                   )}
                   style={theater ? { height: "min(85vh, 56.25vw)" } : undefined}
                 >
-                  {/* Poster UNDER the player: during the split second a fresh
-                      iframe needs to spin up after a navigation, the area
-                      shows the new video's own thumbnail instead of a black
-                      hole. The iframe paints over it as soon as it renders. */}
-                  <img
-                    key={video.id}
-                    src={thumbUrl(video.id, true)}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                  <div ref={hostRef} className="absolute inset-0 h-full w-full" />
+                  <div ref={hostRef} className="h-full w-full" />
 
                   {/*
                     Event-capture overlay: the cross-origin YouTube iframe is
@@ -567,6 +577,46 @@ export function WatchView({
                   </div>
                   </div>
 
+                  {pstate === 3 && bufVeil && (
+                    /* Buffering veil: SOLID black once buffering persists
+                       (instant when it follows a pause, 250ms-delayed on
+                       seek hiccups). Hides whatever YouTube paints in the
+                       buffer window. */
+                    <div className="pointer-events-none absolute inset-0 z-[5] bg-black" />
+                  )}
+                  {pstate === 3 && (
+                    <div className="pointer-events-none absolute inset-0 z-[6] grid place-items-center">
+                      <div className="h-12 w-12 animate-spin rounded-full border-4 border-white/25 border-t-white" />
+                    </div>
+                  )}
+                  {(pstate === -1 || pstate === 5) && (
+                    /* Start cover: SOLID black so YouTube's poster play
+                       button and title chrome never flash before playback
+                       begins. Only our own play chip is visible. */
+                    <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center bg-black">
+                      <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/25">
+                        <Play className="h-7 w-7 translate-x-0.5" />
+                      </div>
+                    </div>
+                  )}
+
+                  {pstate === 2 && (
+                    /* Pause veil: SOLID black — not a dim. When an embed
+                       pauses, YouTube paints its own share / watch-later /
+                       "More videos" panel over the frozen frame; no embed
+                       param can turn that off, and a translucent cover lets
+                       it ghost through (the exact bug reported). Fully
+                       opaque means the panel can never be seen — only our
+                       play chip. This layer exists ONLY while paused; it is
+                       gone the instant playback resumes and never appears
+                       while a video is opening or playing. */
+                    <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center bg-black">
+                      <div className="grid h-20 w-20 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/25 animate-in fade-in duration-200">
+                        <Play className="h-9 w-9 translate-x-0.5" />
+                      </div>
+                    </div>
+                  )}
+
                   {pstate === 0 && (
                     /* Opaque end card: fully covers YouTube's own end screen
                        (share / watch-later buttons, "More videos" row, logo). */
@@ -580,7 +630,7 @@ export function WatchView({
                                 : "Up next"}
                             </div>
                             <button
-                              onClick={() => selectVideo(next)}
+                              onClick={playNextNow}
                               className="w-[440px] max-w-[85vw] rounded-xl bg-white/10 p-4 text-left transition hover:bg-white/15"
                             >
                               <div className="line-clamp-2 font-medium">
@@ -596,7 +646,7 @@ export function WatchView({
                           {next && (
                             <Button
                               size="sm"
-                              onClick={() => selectVideo(next)}
+                              onClick={playNextNow}
                               className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
                             >
                               <SkipForward className="h-4 w-4" /> Play now
@@ -669,7 +719,7 @@ export function WatchView({
                 {upNext.map((u) => (
                   <button
                     key={u.id}
-                    onClick={() => selectVideo(u)}
+                    onClick={() => onSelect(u)}
                     className="w-64 shrink-0 rounded-lg p-2 text-left hover:bg-accent"
                   >
                     <div className="relative aspect-video w-full overflow-hidden rounded-md bg-muted">
@@ -710,7 +760,7 @@ export function WatchView({
                   {upNext.map((u) => (
                     <button
                       key={u.id}
-                      onClick={() => selectVideo(u)}
+                      onClick={() => onSelect(u)}
                       className="flex gap-3 rounded-lg p-2 text-left hover:bg-accent"
                     >
                       <div className="relative aspect-video w-36 shrink-0 overflow-hidden rounded-md bg-muted">
