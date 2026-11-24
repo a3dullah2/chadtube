@@ -68,16 +68,12 @@ export function useYTPlayer(opts: PlayerOpts) {
         width: "100%",
         height: "100%",
         videoId: cbRef.current.videoId,
+        // Standard embed defaults: YouTube renders its own native controls
+        // (controls defaults to 1). No chrome-suppressing params.
         playerVars: {
           autoplay: cbRef.current.autoplay ? 1 : 0,
           rel: 0,
-          modestbranding: 1,
           playsinline: 1,
-          // Native chrome off: WatchView renders its own control bar that only
-          // shows while hovering (and auto-hides during idle playback).
-          controls: 0,
-          disablekb: 1,
-          iv_load_policy: 3,
         },
         events: {
           onStateChange: (e: any) => {
