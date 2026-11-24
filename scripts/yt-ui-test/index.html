@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>YT UI test</title>
+<style>
+  body { margin:0; background:#333; }
+  .wrap { position:relative; width:960px; height:540px; }
+  .wrap > div { width:100%; height:100%; }
+</style>
+</head>
+<body>
+<div class="wrap"><div id="host"></div></div>
+<pre id="log">init</pre>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+  const L = (m) => { document.getElementById('log').textContent += '\n' + m; };
+  window.onYouTubeIframeAPIReady = function () {
+    window.p = new YT.Player('host', {
+      width: '960', height: '540',
+      videoId: 'aqz-KE-bpKQ',
+      playerVars: {
+        autoplay: 1, mute: 1,
+        controls: 0, rel: 0, modestbranding: 1,
+        iv_load_policy: 3, disablekb: 1, playsinline: 1
+      },
+      events: {
+        onReady: () => L('ready'),
+        onStateChange: (e) => L('state:' + e.data)
+      }
+    });
+  };
+</script>
+</body>
+</html>

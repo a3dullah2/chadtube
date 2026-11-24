@@ -1,0 +1,753 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+     4→import {
+     5→  ArrowLeft,
+     6→  Maximize,
+     7→  Minimize,
+     8→  Pause,
+     9→  Play,
+    10→  RectangleHorizontal,
+    11→  SkipForward,
+    12→  Tv,
+    13→  Volume1,
+    14→  Volume2,
+    15→  VolumeX,
+    16→} from "lucide-react";
+    17→import { Badge } from "@/components/ui/badge";
+    18→import { Button } from "@/components/ui/button";
+    19→import { ScrollArea } from "@/components/ui/scroll-area";
+    20→import { Switch } from "@/components/ui/switch";
+    21→import { cn } from "@/lib/utils";
+    22→import { useYTPlayer } from "./use-yt";
+    23→import { chanName, fmtAge, fmtDur, fmtViews, metaJoin, TIER_COLORS, thumbUrl } from "./utils";
+    24→import type { Chan, Tier, Vid } from "./types";
+    25→
+    26→interface WatchViewProps {
+    27→  video: Vid;
+    28→  queue: Vid[];
+    29→  channels: Chan[];
+    30→  autoplay: boolean;
+    31→  theater: boolean;
+    32→  onAutoplayChange: (v: boolean) => void;
+    33→  onTheaterChange: (v: boolean) => void;
+    34→  onBack: () => void;
+    35→  onSelect: (v: Vid) => void;
+    36→  onTv: () => void;
+    37→}
+    38→
+    39→export function WatchView({
+    40→  video,
+    41→  queue,
+    42→  channels,
+    43→  autoplay,
+    44→  theater,
+    45→  onAutoplayChange,
+    46→  onTheaterChange,
+    47→  onBack,
+    48→  onSelect,
+    49→  onTv,
+    50→}: WatchViewProps) {
+    51→  const idx = queue.findIndex((v) => v.id === video.id);
+    52→  const next =
+    53→    idx >= 0 && idx + 1 < queue.length ? queue[idx + 1] : (queue[0] ?? null);
+    54→  const chan = channels[video.c];
+    55→  const upNext = idx >= 0 ? queue.slice(idx + 1, idx + 26) : queue.slice(0, 25);
+    56→  const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    57→  const endIntRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    58→  const [countdown, setCountdown] = useState<number | null>(null);
+    59→
+    60→  // ----- custom player chrome (hover-only controls) -----
+    61→  const shellRef = useRef<HTMLDivElement | null>(null);
+    62→  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    63→  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    64→  const touchRef = useRef(false);
+    65→  const pstateRef = useRef(-1);
+    66→  const [pstate, setPstate] = useState(-1); // YT player state (-1 unstarted .. 3 buffering)
+    67→  const [cur, setCur] = useState(0);
+    68→  const [dur, setDur] = useState(0);
+    69→  const [buf, setBuf] = useState(0);
+    70→  const [muted, setMuted] = useState(false);
+    71→  const [vol, setVol] = useState(100);
+    72→  const [hover, setHover] = useState(false);
+    73→  const [touchUi, setTouchUi] = useState(false);
+    74→  const [controlsHidden, setControlsHidden] = useState(false);
+    75→  const [fs, setFs] = useState(false);
+    76→  const [scrub, setScrub] = useState<number | null>(null); // seek fraction while dragging
+    77→
+    78→  // Controls follow YouTube's rules: visible while the mouse is over the
+    79→  // video (or after a touch tap), hidden the moment it leaves, and during
+    80→  // playback they fade out after 3s without mouse movement. All visibility
+    81→  // changes are driven by events (player state, mouse) — never by effects.
+    82→  // Reset-style: every call clears any pending hide, so continuous mouse
+    83→  // movement keeps controls up and only true 3s idleness hides them.
+    84→  // (The old guard-against-re-schedule version hid the bar mid-hover because
+    85→  // the first-scheduled timeout was never extended by later movement.)
+    86→  const scheduleHide = (ms = 3000) => {
+    87→    cancelHide();
+    88→    idleTimer.current = setTimeout(() => {
+    89→      idleTimer.current = null;
+    90→      setControlsHidden(true);
+    91→    }, ms);
+    92→  };
+    93→
+    94→  const cancelHide = () => {
+    95→    if (idleTimer.current) {
+    96→      clearTimeout(idleTimer.current);
+    97→      idleTimer.current = null;
+    98→    }
+    99→  };
+   100→
+   101→  // Auto-advance bookkeeping for the ended overlay. Cancelled whenever the
+   102→  // user navigates elsewhere, replays, or leaves the watch page.
+   103→  const clearEnd = () => {
+   104→    if (endRef.current) {
+   105→      clearTimeout(endRef.current);
+   106→      endRef.current = null;
+   107→    }
+   108→    if (endIntRef.current) {
+   109→      clearInterval(endIntRef.current);
+   110→      endIntRef.current = null;
+   111→    }
+   112→    setCountdown(null);
+   113→  };
+   114→
+   115→  const replay = () => {
+   116→    clearEnd();
+   117→    const p = playerRef.current;
+   118→    try {
+   119→      p?.seekTo(0, true);
+   120→      p?.playVideo();
+   121→    } catch {
+   122→      /* not ready */
+   123→    }
+   124→  };
+   125→
+   126→  // Navigate to another video. The player is destroyed and recreated for the
+   127→  // new id (see use-yt), so the old iframe — including any end screen it was
+   128→  // showing — disappears instantly. No cover layers required.
+   129→  const selectVideo = (v: Vid) => {
+   130→    clearEnd();
+   131→    onSelect(v);
+   132→  };
+   133→
+   134→  const togglePlay = () => {
+   135→    const p = playerRef.current;
+   136→    if (!p) return;
+   137→    try {
+   138→      if (p.getPlayerState?.() === 1) p.pauseVideo();
+   139→      else p.playVideo();
+   140→    } catch {
+   141→      /* not ready */
+   142→    }
+   143→  };
+   144→
+   145→  const toggleMute = () => {
+   146→    const p = playerRef.current;
+   147→    if (!p) return;
+   148→    try {
+   149→      if (p.isMuted?.()) p.unMute();
+   150→      else p.mute();
+   151→    } catch {
+   152→      /* not ready */
+   153→    }
+   154→  };
+   155→
+   156→  const changeVol = (v: number) => {
+   157→    const p = playerRef.current;
+   158→    if (!p) return;
+   159→    try {
+   160→      p.setVolume(v);
+   161→      if (v > 0 && p.isMuted?.()) p.unMute();
+   162→    } catch {
+   163→      /* not ready */
+   164→    }
+   165→    setVol(v);
+   166→  };
+   167→
+   168→  const toggleFs = () => {
+   169→    const el = shellRef.current;
+   170→    if (!el) return;
+   171→    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+   172→    else el.requestFullscreen?.().catch(() => {});
+   173→  };
+   174→
+   175→  const seekTo = (frac: number) => {
+   176→    const p = playerRef.current;
+   177→    if (!p || !dur) return;
+   178→    try {
+   179→      p.seekTo(frac * dur, true);
+   180→    } catch {
+   181→      /* not ready */
+   182→    }
+   183→  };
+   184→
+   185→  // Click on the video toggles playback; double-click goes fullscreen.
+   186→  // The pending click is cancelled when a double-click lands.
+   187→  const onShellClick = () => {
+   188→    if (touchRef.current) {
+   189→      // Mobile-style: tap toggles the chrome; auto-hide only while playing.
+   190→      if (controlsHidden) {
+   191→        setControlsHidden(false);
+   192→        setTouchUi(true);
+   193→        if (pstateRef.current === 1) scheduleHide();
+   194→      } else {
+   195→        cancelHide();
+   196→        setControlsHidden(true);
+   197→      }
+   198→      return;
+   199→    }
+   200→    if (clickTimer.current) return;
+   201→    clickTimer.current = setTimeout(() => {
+   202→      clickTimer.current = null;
+   203→      togglePlay();
+   204→    }, 250);
+   205→  };
+   206→
+   207→  const onShellDoubleClick = () => {
+   208→    if (clickTimer.current) {
+   209→      clearTimeout(clickTimer.current);
+   210→      clickTimer.current = null;
+   211→    }
+   212→    toggleFs();
+   213→  };
+   214→
+   215→  const onOverlayMouseMove = (e: React.MouseEvent) => {
+   216→    setHover(true);
+   217→    const inBar = !!(e.target as HTMLElement | null)?.closest?.("[data-ct-bar]");
+   218→    if (inBar) {
+   219→      // Interacting with the bar itself: pin controls, never fade mid-drag.
+   220→      cancelHide();
+   221→      setControlsHidden(false);
+   222→    } else if (pstateRef.current === 1) {
+   223→      setControlsHidden(false);
+   224→      scheduleHide(); // reset on every move -> only true idleness hides
+   225→    } else {
+   226→      // paused / buffering / ended -> controls stay up while hovered
+   227→      cancelHide();
+   228→      setControlsHidden(false);
+   229→    }
+   230→  };
+   231→
+   232→  const onShellMouseLeave = () => {
+   233→    setHover(false);
+   234→    setTouchUi(false);
+   235→    cancelHide();
+   236→    setControlsHidden(true); // mouse off the video -> always hide
+   237→  };
+   238→
+   239→  const { hostRef, playerRef } = useYTPlayer({
+   240→    videoId: video.id,
+   241→    autoplay: true,
+   242→    onState: (s) => {
+   243→      pstateRef.current = s;
+   244→      setPstate(s);
+   245→      if (s === 1) {
+   246→        scheduleHide();
+   247→      } else {
+   248→        cancelHide();
+   249→        setControlsHidden(false); // paused/buffering/ended -> show while hovered
+   250→      }
+   251→    },
+   252→    onEnd: () => {
+   253→      if (autoplay && next) {
+   254→        // Our own end card replaces YouTube's end screen; advance after 5s.
+   255→        setCountdown(5);
+   256→        endIntRef.current = setInterval(() => {
+   257→          setCountdown((c) => (c !== null && c > 1 ? c - 1 : null));
+   258→        }, 1000);
+   259→        endRef.current = setTimeout(() => {
+   260→          clearEnd();
+   261→          selectVideo(next);
+   262→        }, 5000);
+   263→      }
+   264→    },
+   265→  });
+   266→
+   267→  useEffect(
+   268→    () => () => {
+   269→      if (endRef.current) clearTimeout(endRef.current);
+   270→      if (endIntRef.current) clearInterval(endIntRef.current);
+   271→    },
+   272→    []
+   273→  );
+   274→
+   275→  // A pending auto-advance belongs to the video that just ended — navigating
+   276→  // to any other video must cancel it instead of hijacking the navigation.
+   277→  // Resetting pstate to unstarted also hides the ended end card BEFORE the
+   278→  // navigation paints (useLayoutEffect), so it can never flash for a frame
+   279→  // with the new video's id.
+   280→  useLayoutEffect(() => {
+   281→    clearEnd();
+   282→    setPstate(-1);
+   283→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   284→  }, [video.id]);
+   285→
+   286→  // Player-state polling + controls visibility machinery.
+   287→  useEffect(() => {
+   288→    try {
+   289→      touchRef.current = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+   290→    } catch {
+   291→      /* noop */
+   292→    }
+   293→    const poll = setInterval(() => {
+   294→      const p = playerRef.current;
+   295→      if (!p || typeof p.getCurrentTime !== "function") return;
+   296→      try {
+   297→        setCur(p.getCurrentTime() || 0);
+   298→        setDur(p.getDuration() || 0);
+   299→        setBuf(p.getVideoLoadedFraction() || 0);
+   300→        setMuted(!!p.isMuted?.());
+   301→        const v = p.getVolume?.();
+   302→        if (typeof v === "number") setVol(v);
+   303→      } catch {
+   304→        /* player mid-swap */
+   305→      }
+   306→    }, 250);
+   307→    const onFs = () => setFs(document.fullscreenElement === shellRef.current);
+   308→    document.addEventListener("fullscreenchange", onFs);
+   309→    return () => {
+   310→      clearInterval(poll);
+   311→      document.removeEventListener("fullscreenchange", onFs);
+   312→      if (idleTimer.current) clearTimeout(idleTimer.current);
+   313→      if (clickTimer.current) clearTimeout(clickTimer.current);
+   314→    };
+   315→  }, []);
+   316→
+   317→  // YouTube-style shortcuts (t = theater, f = fullscreen, m = mute,
+   318→  // space/k = play-pause, arrows = seek). Inline player calls keep this
+   319→  // effect's dependencies to just the theater props.
+   320→  useEffect(() => {
+   321→    const onKey = (e: KeyboardEvent) => {
+   322→      if (e.metaKey || e.ctrlKey || e.altKey) return;
+   323→      const el = e.target as HTMLElement | null;
+   324→      if (
+   325→        el &&
+   326→        (el.tagName === "INPUT" ||
+   327→          el.tagName === "TEXTAREA" ||
+   328→          el.isContentEditable)
+   329→      )
+   330→        return;
+   331→      if (e.key === "t") {
+   332→        onTheaterChange(!theater);
+   333→        return;
+   334→      }
+   335→      const p = playerRef.current;
+   336→      if (!p) return;
+   337→      try {
+   338→        if (e.key === " " || e.key === "k") {
+   339→          e.preventDefault();
+   340→          if (p.getPlayerState?.() === 1) p.pauseVideo();
+   341→          else p.playVideo();
+   342→        } else if (e.key === "ArrowRight") {
+   343→          e.preventDefault();
+   344→          p.seekTo(p.getCurrentTime() + 5, true);
+   345→        } else if (e.key === "ArrowLeft") {
+   346→          e.preventDefault();
+   347→          p.seekTo(Math.max(0, p.getCurrentTime() - 5), true);
+   348→        } else if (e.key === "m") {
+   349→          if (p.isMuted?.()) p.unMute();
+   350→          else p.mute();
+   351→        } else if (e.key === "f") {
+   352→          toggleFs();
+   353→        }
+   354→      } catch {
+   355→        /* not ready */
+   356→      }
+   357→    };
+   358→    window.addEventListener("keydown", onKey);
+   359→    return () => window.removeEventListener("keydown", onKey);
+   360→  }, [theater, onTheaterChange, playerRef]);
+   361→
+   362→  return (
+   363→    <>
+   364→      <div className="mx-auto flex max-w-[1700px] flex-wrap items-center gap-3 px-4 pb-3 pt-4">
+   365→        <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
+   366→          <ArrowLeft className="h-4 w-4" /> Back
+   367→        </Button>
+   368→        {idx >= 0 && (
+   369→          <span className="text-sm text-muted-foreground">
+   370→            {idx + 1} / {queue.length} in queue
+   371→          </span>
+   372→        )}
+   373→        <div className="ml-auto flex items-center gap-3">
+   374→          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+   375→            <Switch
+   376→              checked={autoplay}
+   377→              onCheckedChange={onAutoplayChange}
+   378→              aria-label="Autoplay next"
+   379→            />
+   380→            Autoplay
+   381→          </label>
+   382→          <Button
+   383→            variant="outline"
+   384→            size="sm"
+   385→            onClick={() => onTheaterChange(!theater)}
+   386→            aria-pressed={theater}
+   387→            title="Theater mode (t)"
+   388→            className="gap-2"
+   389→          >
+   390→            <RectangleHorizontal className="h-4 w-4" /> Theater
+   391→          </Button>
+   392→          <Button variant="outline" size="sm" onClick={onTv} className="gap-2">
+   393→            <Tv className="h-4 w-4" /> TV mode
+   394→          </Button>
+   395→          {next && (
+   396→            <Button
+   397→              size="sm"
+   398→              onClick={() => selectVideo(next)}
+   399→              className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
+   400→            >
+   401→              Next <SkipForward className="h-4 w-4" />
+   402→            </Button>
+   403→          )}
+   404→        </div>
+   405→      </div>
+   406→
+   407→      <div className={theater ? "pb-6" : "mx-auto max-w-[1700px] px-4 pb-4"}>
+   408→        {/*
+   409→          Theater collapses the two-column grid to a plain block so the player
+   410→          bleeds edge-to-edge. The player host div keeps the exact same tree
+   411→          position in both modes — swapping only its classes/size — so the
+   412→          YouTube iframe is never unmounted and playback continues seamlessly.
+   413→        */}
+   414→        <div
+   415→          className={
+   416→            theater
+   417→              ? ""
+   418→              : "grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]"
+   419→          }
+   420→        >
+   421→          <div className="min-w-0">
+   422→            {(() => {
+   423→              const show = (hover || touchUi) && !controlsHidden;
+   424→              const playedPct = dur ? (scrub ?? cur / dur) * 100 : 0;
+   425→              const bufPct = Math.max(playedPct, buf * 100);
+   426→              const seekGrad = `linear-gradient(to right, #e5484d 0%, #e5484d ${playedPct}%, rgba(255,255,255,.55) ${playedPct}%, rgba(255,255,255,.55) ${bufPct}%, rgba(255,255,255,.25) ${bufPct}%)`;
+   427→              const volPct = muted ? 0 : vol;
+   428→              const volGrad = `linear-gradient(to right, #fff 0%, #fff ${volPct}%, rgba(255,255,255,.25) ${volPct}%)`;
+   429→              return (
+   430→                <div
+   431→                  ref={shellRef}
+   432→                  className={cn(
+   433→                    "relative overflow-hidden bg-black",
+   434→                    theater ? "w-full" : "aspect-video w-full rounded-xl"
+   435→                  )}
+   436→                  style={theater ? { height: "min(85vh, 56.25vw)" } : undefined}
+   437→                >
+   438→                  {/* Poster UNDER the player: during the split second a fresh
+   439→                      iframe needs to spin up after a navigation, the area
+   440→                      shows the new video's own thumbnail instead of a black
+   441→                      hole. The iframe paints over it as soon as it renders. */}
+   442→                  <img
+   443→                    key={video.id}
+   444→                    src={thumbUrl(video.id, true)}
+   445→                    alt=""
+   446→                    className="absolute inset-0 h-full w-full object-cover"
+   447→                  />
+   448→                  <div ref={hostRef} className="absolute inset-0 h-full w-full" />
+   449→
+   450→                  {/*
+   451→                    Event-capture overlay: the cross-origin YouTube iframe is
+   452→                    out-of-process and never reports mouse movement to this
+   453→                    page, so a transparent layer above it drives hover
+   454→                    detection, click-to-pause and double-click fullscreen.
+   455→                    Playback itself is driven through the IFrame API.
+   456→                  */}
+   457→                  <div
+   458→                    className={cn("absolute inset-0", !show && "cursor-none")}
+   459→                    onMouseEnter={() => {
+   460→                      setHover(true);
+   461→                      setControlsHidden(false); // show instantly, no wiggle needed
+   462→                      if (pstateRef.current === 1) scheduleHide();
+   463→                    }}
+   464→                    onMouseMove={onOverlayMouseMove}
+   465→                    onMouseLeave={onShellMouseLeave}
+   466→                    onClick={onShellClick}
+   467→                    onDoubleClick={onShellDoubleClick}
+   468→                  >
+   469→                    {/* Hover-only control bar — YouTube-style. The bar lives
+   470→                        inside the overlay so moving onto it keeps controls up. */}
+   471→                    <div
+   472→                      data-ct-bar
+   473→                      onClick={(e) => e.stopPropagation()}
+   474→                      onDoubleClick={(e) => e.stopPropagation()}
+   475→                      className={cn(
+   476→                        "absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 via-black/40 to-transparent pb-1 pt-8 transition-opacity duration-200",
+   477→                        show ? "opacity-100" : "pointer-events-none opacity-0"
+   478→                      )}
+   479→                    >
+   480→                    <div className="px-3">
+   481→                      <input
+   482→                        type="range"
+   483→                        min={0}
+   484→                        max={1000}
+   485→                        step={1}
+   486→                        aria-label="Seek"
+   487→                        className="ct-range h-1 w-full"
+   488→                        style={{ background: seekGrad }}
+   489→                        value={Math.round((scrub ?? (dur ? cur / dur : 0)) * 1000)}
+   490→                        onChange={(e) => {
+   491→                          const frac = Number(e.target.value) / 1000;
+   492→                          setScrub(frac);
+   493→                          seekTo(frac);
+   494→                        }}
+   495→                        onPointerDown={() => {
+   496→                          if (touchRef.current) setTouchUi(true);
+   497→                        }}
+   498→                        onPointerUp={() => setScrub(null)}
+   499→                        onKeyUp={() => setScrub(null)}
+   500→                        onBlur={() => setScrub(null)}
+   501→                      />
+   502→                    </div>
+   503→                    <div className="flex items-center gap-0.5 px-1.5 text-white">
+   504→                      <button
+   505→                        onClick={togglePlay}
+   506→                        aria-label={pstate === 1 ? "Pause" : "Play"}
+   507→                        className="ct-cbtn"
+   508→                      >
+   509→                        {pstate === 1 ? (
+   510→                          <Pause className="h-5 w-5" />
+   511→                        ) : (
+   512→                          <Play className="h-5 w-5" />
+   513→                        )}
+   514→                      </button>
+   515→                      <button
+   516→                        onClick={toggleMute}
+   517→                        aria-label={muted ? "Unmute" : "Mute"}
+   518→                        className="ct-cbtn"
+   519→                      >
+   520→                        {muted || vol === 0 ? (
+   521→                          <VolumeX className="h-5 w-5" />
+   522→                        ) : vol < 50 ? (
+   523→                          <Volume1 className="h-5 w-5" />
+   524→                        ) : (
+   525→                          <Volume2 className="h-5 w-5" />
+   526→                        )}
+   527→                      </button>
+   528→                      <input
+   529→                        type="range"
+   530→                        min={0}
+   531→                        max={100}
+   532→                        step={1}
+   533→                        aria-label="Volume"
+   534→                        className="ct-range h-1 w-16"
+   535→                        style={{ background: volGrad }}
+   536→                        value={muted ? 0 : vol}
+   537→                        onChange={(e) => changeVol(Number(e.target.value))}
+   538→                      />
+   539→                      <span className="ml-1.5 text-xs tabular-nums text-white/90">
+   540→                        {fmtDur(scrub !== null ? scrub * dur : cur) || "0:00"} /{" "}
+   541→                        {fmtDur(dur) || "0:00"}
+   542→                      </span>
+   543→                      <div className="ml-auto flex items-center gap-0.5">
+   544→                        <button
+   545→                          onClick={() => onTheaterChange(!theater)}
+   546→                          aria-pressed={theater}
+   547→                          title="Theater mode (t)"
+   548→                          aria-label="Theater mode"
+   549→                          className="ct-cbtn"
+   550→                        >
+   551→                          <RectangleHorizontal className="h-5 w-5" />
+   552→                        </button>
+   553→                        <button
+   554→                          onClick={toggleFs}
+   555→                          aria-label={fs ? "Exit fullscreen" : "Fullscreen"}
+   556→                          title="Fullscreen (f)"
+   557→                          className="ct-cbtn"
+   558→                        >
+   559→                          {fs ? (
+   560→                            <Minimize className="h-5 w-5" />
+   561→                          ) : (
+   562→                            <Maximize className="h-5 w-5" />
+   563→                          )}
+   564→                        </button>
+   565→                      </div>
+   566→                    </div>
+   567→                  </div>
+   568→                  </div>
+   569→
+   570→                  {pstate === 0 && (
+   571→                    /* Opaque end card: fully covers YouTube's own end screen
+   572→                       (share / watch-later buttons, "More videos" row, logo). */
+   573→                    <div className="absolute inset-0 z-20 grid place-items-center bg-black text-white">
+   574→                      <div className="flex flex-col items-center gap-4 px-6 text-center">
+   575→                        {next && (
+   576→                          <>
+   577→                            <div className="text-xs uppercase tracking-widest text-white/60">
+   578→                              {countdown !== null
+   579→                                ? `Up next in ${countdown}s`
+   580→                                : "Up next"}
+   581→                            </div>
+   582→                            <button
+   583→                              onClick={() => selectVideo(next)}
+   584→                              className="w-[440px] max-w-[85vw] rounded-xl bg-white/10 p-4 text-left transition hover:bg-white/15"
+   585→                            >
+   586→                              <div className="line-clamp-2 font-medium">
+   587→                                {next.t}
+   588→                              </div>
+   589→                              <div className="mt-1 text-xs text-white/60">
+   590→                                {chanName(next, channels)}
+   591→                              </div>
+   592→                            </button>
+   593→                          </>
+   594→                        )}
+   595→                        <div className="flex items-center gap-2">
+   596→                          {next && (
+   597→                            <Button
+   598→                              size="sm"
+   599→                              onClick={() => selectVideo(next)}
+   600→                              className="gap-2 bg-[#e5484d] text-white hover:bg-[#d23c41]"
+   601→                            >
+   602→                              <SkipForward className="h-4 w-4" /> Play now
+   603→                            </Button>
+   604→                          )}
+   605→                          {countdown !== null && (
+   606→                            <Button
+   607→                              size="sm"
+   608→                              variant="outline"
+   609→                              onClick={clearEnd}
+   610→                              className="border-white/30 bg-transparent text-white hover:bg-white/10"
+   611→                            >
+   612→                              Cancel
+   613→                            </Button>
+   614→                          )}
+   615→                          <Button
+   616→                            size="sm"
+   617→                            variant="outline"
+   618→                            onClick={replay}
+   619→                            className="border-white/30 bg-transparent text-white hover:bg-white/10"
+   620→                          >
+   621→                            Replay
+   622→                          </Button>
+   623→                        </div>
+   624→                      </div>
+   625→                    </div>
+   626→                  )}
+   627→                </div>
+   628→              );
+   629→            })()}
+   630→            <h1
+   631→              className={cn(
+   632→                "text-lg font-semibold leading-snug",
+   633→                theater ? "mt-4 px-4" : "mt-3"
+   634→              )}
+   635→            >
+   636→              {video.t}
+   637→            </h1>
+   638→            <div
+   639→              className={cn(
+   640→                "mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground",
+   641→                theater && "px-4"
+   642→              )}
+   643→            >
+   644→              <span className="font-medium text-foreground">
+   645→                {video.up || chan?.n}
+   646→              </span>
+   647→              <Badge
+   648→                style={{
+   649→                  backgroundColor: TIER_COLORS[(chan?.tier ?? "D") as Tier],
+   650→                  color: "#111",
+   651→                }}
+   652→                className="border-0"
+   653→              >
+   654→                {chan?.tier} tier
+   655→              </Badge>
+   656→              {fmtViews(video.v) && <span>{fmtViews(video.v)}</span>}
+   657→              {fmtAge(video.ts) && <span>{fmtAge(video.ts)}</span>}
+   658→              {fmtDur(video.d) && <span>{fmtDur(video.d)}</span>}
+   659→            </div>
+   660→          </div>
+   661→
+   662→          {theater ? (
+   663→            // Theater: Up next becomes a horizontal strip below the player.
+   664→            <div className="mt-5 px-4">
+   665→              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">
+   666→                Up next
+   667→              </h2>
+   668→              <div className="flex gap-3 overflow-x-auto pb-2">
+   669→                {upNext.map((u) => (
+   670→                  <button
+   671→                    key={u.id}
+   672→                    onClick={() => selectVideo(u)}
+   673→                    className="w-64 shrink-0 rounded-lg p-2 text-left hover:bg-accent"
+   674→                  >
+   675→                    <div className="relative aspect-video w-full overflow-hidden rounded-md bg-muted">
+   676→                      <img
+   677→                        src={thumbUrl(u.id)}
+   678→                        alt=""
+   679→                        loading="lazy"
+   680→                        className="h-full w-full object-cover"
+   681→                      />
+   682→                      {fmtDur(u.d) && (
+   683→                        <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 text-[10px] text-white">
+   684→                          {fmtDur(u.d)}
+   685→                        </span>
+   686→                      )}
+   687→                    </div>
+   688→                    <div className="mt-1.5 line-clamp-2 text-sm font-medium">
+   689→                      {u.t}
+   690→                    </div>
+   691→                    <div className="mt-0.5 text-xs text-muted-foreground">
+   692→                      {metaJoin(chanName(u, channels), fmtViews(u.v), fmtAge(u.ts))}
+   693→                    </div>
+   694→                  </button>
+   695→                ))}
+   696→                {upNext.length === 0 && (
+   697→                  <p className="p-4 text-sm text-muted-foreground">
+   698→                    End of queue.
+   699→                  </p>
+   700→                )}
+   701→              </div>
+   702→            </div>
+   703→          ) : (
+   704→            <div>
+   705→              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">
+   706→                Up next
+   707→              </h2>
+   708→              <ScrollArea className="h-[420px] rounded-xl lg:h-[calc(100vh-190px)]">
+   709→                <div className="flex flex-col gap-1 pr-3">
+   710→                  {upNext.map((u) => (
+   711→                    <button
+   712→                      key={u.id}
+   713→                      onClick={() => selectVideo(u)}
+   714→                      className="flex gap-3 rounded-lg p-2 text-left hover:bg-accent"
+   715→                    >
+   716→                      <div className="relative aspect-video w-36 shrink-0 overflow-hidden rounded-md bg-muted">
+   717→                        <img
+   718→                          src={thumbUrl(u.id)}
+   719→                          alt=""
+   720→                          loading="lazy"
+   721→                          className="h-full w-full object-cover"
+   722→                        />
+   723→                        {fmtDur(u.d) && (
+   724→                          <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 text-[10px] text-white">
+   725→                            {fmtDur(u.d)}
+   726→                          </span>
+   727→                        )}
+   728→                      </div>
+   729→                      <div className="min-w-0">
+   730→                        <div className="line-clamp-2 text-sm font-medium">
+   731→                          {u.t}
+   732→                        </div>
+   733→                        <div className="mt-0.5 text-xs text-muted-foreground">
+   734→                          {metaJoin(chanName(u, channels), fmtViews(u.v), fmtAge(u.ts))}
+   735→                        </div>
+   736→                      </div>
+   737→                    </button>
+   738→                  ))}
+   739→                  {upNext.length === 0 && (
+   740→                    <p className="p-4 text-sm text-muted-foreground">
+   741→                      End of queue.
+   742→                    </p>
+   743→                  )}
+   744→                </div>
+   745→              </ScrollArea>
+   746→            </div>
+   747→          )}
+   748→        </div>
+   749→      </div>
+   750→    </>
+   751→  );
+   752→}
+   753→
