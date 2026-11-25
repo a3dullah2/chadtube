@@ -34,3 +34,20 @@ export interface HistEntry {
   id: string;
   ts: number;
 }
+
+/** A video saved (bookmarked) for later. Newest first when persisted. */
+export interface BookmarkEntry {
+  id: string;
+  /** When the video was saved (unix ms). */
+  ts: number;
+}
+
+/** Last known playback position of a video (unix-ms `ts` for LRU pruning). */
+export interface ProgressEntry {
+  /** Position in seconds. */
+  pos: number;
+  /** Video duration in seconds as reported by the player. */
+  dur: number;
+  /** When the position was last recorded (unix ms). */
+  ts: number;
+}
