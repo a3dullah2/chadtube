@@ -10,8 +10,10 @@ import { getApiPayload } from "@/lib/library";
  *
  * Caching: s-maxage keeps the payload at the CDN edge for a day (cheap,
  * fast TTFB worldwide) with stale-while-revalidate covering refreshes;
- * `no-cache` keeps browsers revalidating via ETag so a data update reaches
- * them on their next normal reload instead of up to a day later.
+ * max-age=0 + must-revalidate keeps browsers revalidating via ETag (the
+ * Vercel CDN refuses to cache responses marked `no-cache`, so the explicit
+ * zero-max-age form is used instead) so a data update reaches users on
+ * their next normal reload instead of up to a day later.
  */
 export async function GET(req: Request) {
   let payload: Awaited<ReturnType<typeof getApiPayload>>;
@@ -23,7 +25,7 @@ export async function GET(req: Request) {
 
   const base = {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "public, no-cache, s-maxage=86400, stale-while-revalidate=86400",
+    "Cache-Control": "public, max-age=0, must-revalidate, s-maxage=86400, stale-while-revalidate=86400",
     ETag: payload.etag,
     Vary: "Accept-Encoding",
   };
