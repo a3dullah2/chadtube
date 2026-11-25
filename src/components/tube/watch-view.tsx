@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowLeft, RectangleHorizontal, SkipForward } from "lucide-react";
+import {
+  ArrowLeft,
+  Bookmark,
+  BookmarkCheck,
+  RectangleHorizontal,
+  SkipForward,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -17,8 +23,15 @@ interface WatchViewProps {
   channels: Chan[];
   autoplay: boolean;
   theater: boolean;
+  /** Resume position in seconds; undefined = start from the top. */
+  startAt?: number;
+  /** True when the video is in the saved (bookmarked) list. */
+  bookmarked: boolean;
   onAutoplayChange: (v: boolean) => void;
   onTheaterChange: (v: boolean) => void;
+  onToggleBookmark: () => void;
+  /** Persist the last playback position (called on a 5s poll and on unmount). */
+  onProgress: (id: string, pos: number, dur: number) => void;
   onBack: () => void;
   onSelect: (v: Vid) => void;
 }
@@ -29,17 +42,32 @@ export function WatchView({
   channels,
   autoplay,
   theater,
+  startAt,
+  bookmarked,
   onAutoplayChange,
   onTheaterChange,
+  onToggleBookmark,
+  onProgress,
   onBack,
   onSelect,
 }: WatchViewProps) {
   const idx = queue.findIndex((v) => v.id === video.id);
+  // Next wraps around a multi-video queue (playlist loop), but a 1-video
+  // queue has no meaningful "next" — pointing it at the current video would
+  // make the Next button replay itself and autoplay loop it forever.
   const next =
-    idx >= 0 && idx + 1 < queue.length ? queue[idx + 1] : (queue[0] ?? null);
+    queue.length > 1 ? (queue[(idx + 1) % queue.length] ?? null) : null;
   const chan = channels[video.c];
   const upNext = idx >= 0 ? queue.slice(idx + 1, idx + 26) : queue.slice(0, 25);
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Watch-progress sampling. The YouTube IFrame API has no "on position
+  // change" event, so poll getCurrentTime()/getDuration() every 5s and once
+  // more on unmount — the freshest sample always lands in localStorage.
+  const lastRef = useRef<{ pos: number; dur: number }>({ pos: 0, dur: 0 });
+  const onProgressRef = useRef(onProgress);
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+  });
 
   const clearEnd = () => {
     if (endRef.current) {
@@ -51,24 +79,55 @@ export function WatchView({
   // The player is a plain, standard YouTube embed. YouTube renders its own
   // native controls — progress bar, play/pause, volume, settings, fullscreen
   // — inside its iframe; this app draws nothing on top of it. The IFrame API
-  // stays connected purely so the Autoplay switch can advance to the next
-  // video when the current one ends.
-  const { hostRef } = useYTPlayer({
+  // stays connected for two jobs: advancing Autoplay when a video ends, and
+  // sampling getCurrentTime() so watch progress survives reloads.
+  const { hostRef, playerRef } = useYTPlayer({
     videoId: video.id,
     autoplay: true,
+    start: startAt,
     onEnd: () => {
       clearEnd();
+      // A completed video is stored at 100% — progressRatio() then treats it
+      // as finished, so its card stops showing a resume bar.
+      const dur = lastRef.current.dur;
+      if (dur > 0) onProgressRef.current(video.id, dur, dur);
       if (autoplay && next) {
         endRef.current = setTimeout(() => onSelect(next), 2000);
       }
     },
   });
 
+  // Watch-progress sampling: runs the 5s poll; refs used by the player
+  // callbacks above are declared just before it.
+  useEffect(() => {
+    lastRef.current = { pos: 0, dur: 0 };
+    const sample = () => {
+      const p = playerRef.current;
+      if (!p || typeof p.getCurrentTime !== "function") return;
+      try {
+        const pos = p.getCurrentTime();
+        const dur = p.getDuration();
+        // pos 0 = playback never started (autoplay blocked, still buffering)
+        // — nothing to resume, don't record it.
+        if (!dur || !isFinite(pos) || pos <= 0) return;
+        lastRef.current = { pos, dur };
+        onProgressRef.current(video.id, pos, dur);
+      } catch {
+        /* player not ready yet */
+      }
+    };
+    const iv = setInterval(sample, 5000);
+    return () => {
+      clearInterval(iv);
+      const { pos, dur } = lastRef.current;
+      if (dur > 0 && pos > 0) onProgressRef.current(video.id, pos, dur);
+    };
+  }, [video.id]);
+
   // A pending auto-advance belongs to the video that just ended — navigating
   // to any other video must cancel it instead of hijacking the navigation.
   useEffect(() => {
     clearEnd();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video.id]);
 
   useEffect(
@@ -98,6 +157,20 @@ export function WatchView({
             />
             Autoplay
           </label>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onToggleBookmark}
+            aria-pressed={bookmarked}
+            title={bookmarked ? "Remove from saved" : "Save for later"}
+            className={cn(
+              "gap-2",
+              bookmarked && "border-[#e5484d]/50 text-[#e5484d] hover:text-[#e5484d]"
+            )}
+          >
+            {bookmarked ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+            {bookmarked ? "Saved" : "Save"}
+          </Button>
           <Button
             variant="outline"
             size="sm"
