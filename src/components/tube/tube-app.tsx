@@ -2,6 +2,9 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
+  Bookmark,
+  BookmarkCheck,
+  Clock,
   Dices,
   History,
   Home,
@@ -26,7 +29,25 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { WatchView } from "./watch-view";
-import type { Chan, HistEntry, SortMode, Tier, TubeData, Vid } from "./types";
+import {
+  isResumable,
+  loadProgress,
+  loadSaved,
+  progressRatio,
+  resumeStart,
+  saveProgress,
+  saveSaved,
+} from "./store";
+import type {
+  BookmarkEntry,
+  Chan,
+  HistEntry,
+  ProgressEntry,
+  SortMode,
+  Tier,
+  TubeData,
+  Vid,
+} from "./types";
 import {
   chanName,
   fmtAge,
@@ -44,7 +65,7 @@ import {
 const TIERS: Tier[] = ["S", "A", "B", "C", "D", "R", "★"];
 const PAGE = 40;
 
-type View = "home" | "watch" | "history";
+type View = "home" | "watch" | "history" | "saved";
 
 export function TubeApp() {
   const [data, setData] = useState<TubeData | null>(null);
@@ -67,8 +88,14 @@ export function TubeApp() {
   const [visible, setVisible] = useState(PAGE);
   const [drawer, setDrawer] = useState(false);
   const [hist, setHist] = useState<HistEntry[]>([]);
+  // Saved (bookmarks) + watch progress — localStorage-backed via store.ts.
+  const [saved, setSaved] = useState<BookmarkEntry[]>([]);
+  const [progress, setProgress] = useState<Record<string, ProgressEntry>>({});
   const [autoplay, setAutoplay] = useState(true);
   const [mounted, setMounted] = useState(false);
+  /** True once persisted state has been read back from localStorage — persist
+      effects stay dormant until then so a mount never clobbers stored data. */
+  const [hydrated, setHydrated] = useState(false);
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
 
@@ -85,10 +112,13 @@ export function TubeApp() {
         if (a !== null) setAutoplay(a === "1");
         if (localStorage.getItem("chadtube.pk") === "1") setPkMode(true);
         if (localStorage.getItem("chadtube.theater") === "1") setTheater(true);
+        setSaved(loadSaved());
+        setProgress(loadProgress());
       } catch {
         /* noop */
       }
       setMounted(true);
+      setHydrated(true);
       try {
         // The inline bootstrap script in layout.tsx starts this request while
         // the HTML is still parsing; by the time we hydrate it's in flight.
@@ -134,6 +164,44 @@ export function TubeApp() {
     }
     toast({ title: "Watch history cleared" });
   }, [toast]);
+
+  // Saved + progress persistence: mirror state into localStorage on change,
+  // but only after hydration — otherwise a fresh mount would wipe the store
+  // (and with it, another open tab's progress) with empty initial state.
+  useEffect(() => {
+    if (hydrated) saveSaved(saved);
+  }, [saved, hydrated]);
+  useEffect(() => {
+    if (hydrated) saveProgress(progress);
+  }, [progress, hydrated]);
+
+  const toggleSaved = useCallback(
+    (v: Vid) => {
+      const exists = saved.some((b) => b.id === v.id);
+      setSaved((prev) =>
+        exists ? prev.filter((b) => b.id !== v.id) : [{ id: v.id, ts: Date.now() }, ...prev]
+      );
+      toast({
+        title: exists ? "Removed from saved" : "Saved for later",
+        description: v.t,
+      });
+    },
+    [saved, toast]
+  );
+
+  const clearSaved = useCallback(() => {
+    setSaved([]);
+    toast({ title: "Saved list cleared" });
+  }, [toast]);
+
+  const pushProgress = useCallback((id: string, pos: number, dur: number) => {
+    setProgress((prev) => {
+      const cur = prev[id];
+      // Same position (±1s) while paused: skip the state churn entirely.
+      if (cur && cur.dur === dur && Math.abs(cur.pos - pos) < 1) return prev;
+      return { ...prev, [id]: { pos, dur, ts: Date.now() } };
+    });
+  }, []);
 
   const changeAutoplay = useCallback((v: boolean) => {
     setAutoplay(v);
@@ -248,13 +316,39 @@ export function TubeApp() {
     setTheme(theme === "dark" ? "light" : "dark");
   }, [theme, setTheme]);
 
+  // O(1) id -> video lookups (31k entries, rebuilt only when data loads).
+  const byId = useMemo(
+    () => new Map(data ? data.videos.map((v) => [v.id, v]) : []),
+    [data]
+  );
+
   const histVids = useMemo(() => {
     if (!data) return [];
     return hist
-      .map((h) => ({ h, v: data.videos.find((x) => x.id === h.id) }))
+      .map((h) => ({ h, v: byId.get(h.id) }))
       .filter((x): x is { h: HistEntry; v: Vid } => !!x.v)
       .map((x) => ({ entry: x.h, vid: x.v }));
-  }, [data, hist]);
+  }, [hist, byId]);
+
+  const savedVids = useMemo(
+    () =>
+      saved
+        .map((b) => ({ entry: b, vid: byId.get(b.id) }))
+        .filter((x): x is { entry: BookmarkEntry; vid: Vid } => !!x.vid),
+    [saved, byId]
+  );
+
+  /** Partially-watched videos, most recently watched first (home strip). */
+  const resumeList = useMemo(
+    () =>
+      Object.entries(progress)
+        .filter(([id, e]) => isResumable(e) && byId.has(id))
+        .sort((a, b) => b[1].ts - a[1].ts)
+        .slice(0, 12)
+        .map(([id]) => byId.get(id))
+        .filter((v): v is Vid => !!v),
+    [progress, byId]
+  );
 
   const navItem = (
     icon: React.ReactNode,
@@ -281,6 +375,11 @@ export function TubeApp() {
           setChan(null);
           applyFilter();
           goHome();
+          onNavigate?.();
+        })}
+        {navItem(<Bookmark className="h-4 w-4" />, "Saved", view === "saved", () => {
+          setView("saved");
+          setDrawer(false);
           onNavigate?.();
         })}
         {navItem(<History className="h-4 w-4" />, "History", view === "history", () => {
@@ -440,6 +539,15 @@ export function TubeApp() {
               variant="ghost"
               size="icon"
               className="hidden sm:inline-flex"
+              onClick={() => setView("saved")}
+              aria-label="Saved videos"
+            >
+              <Bookmark className="h-5 w-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hidden sm:inline-flex"
               onClick={() => setView("history")}
               aria-label="Watch history"
             >
@@ -527,8 +635,12 @@ export function TubeApp() {
               channels={channels}
               autoplay={autoplay}
               theater={theater}
+              startAt={resumeStart(progress[current.id])}
+              bookmarked={saved.some((b) => b.id === current.id)}
               onAutoplayChange={changeAutoplay}
               onTheaterChange={changeTheater}
+              onToggleBookmark={() => toggleSaved(current)}
+              onProgress={pushProgress}
               onBack={goHome}
               onSelect={openInQueue}
             />
@@ -581,8 +693,101 @@ export function TubeApp() {
                 </div>
               )}
             </div>
+          ) : view === "saved" ? (
+            <div className="mx-auto max-w-4xl px-4 py-4">
+              <div className="mb-4 flex items-center gap-3">
+                <h1 className="text-xl font-bold">Saved</h1>
+                {savedVids.length > 0 && (
+                  <Button variant="outline" size="sm" onClick={clearSaved}>
+                    Clear saved
+                  </Button>
+                )}
+              </div>
+              {savedVids.length === 0 ? (
+                <p className="py-16 text-center text-muted-foreground">
+                  Nothing saved yet — tap the bookmark on any video to keep it
+                  here.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {savedVids.map(({ entry, vid }) => (
+                    <div key={vid.id} className="relative">
+                      <button
+                        onClick={() =>
+                          openFromGrid(vid, savedVids.map((x) => x.vid))
+                        }
+                        className="flex w-full gap-3 rounded-lg p-2 pr-12 text-left hover:bg-accent"
+                      >
+                        <div className="relative aspect-video w-44 shrink-0 overflow-hidden rounded-md bg-muted">
+                          <img
+                            src={thumbUrl(vid.id)}
+                            alt=""
+                            loading="lazy"
+                            className="h-full w-full object-cover"
+                          />
+                          {fmtDur(vid.d) && (
+                            <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 text-[10px] text-white">
+                              {fmtDur(vid.d)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="line-clamp-2 text-sm font-medium">
+                            {vid.t}
+                          </div>
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {metaJoin(chanName(vid, channels), fmtViews(vid.v))}
+                            {" · "}saved {fmtTimeAgo(entry.ts)}
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => toggleSaved(vid)}
+                        aria-label={`Remove ${vid.t} from saved`}
+                        className="absolute right-2 top-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ) : (
             <>
+              {/* Continue watching */}
+              {resumeList.length > 0 && (
+                <div className="px-4 pt-3">
+                  <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+                    <Clock className="h-4 w-4" /> Continue watching
+                  </h2>
+                  <div className="flex gap-3 overflow-x-auto pb-1">
+                    {resumeList.map((v) => (
+                      <button
+                        key={v.id}
+                        onClick={() => openFromGrid(v, resumeList)}
+                        className="w-56 shrink-0 rounded-lg p-2 text-left hover:bg-accent"
+                      >
+                        <div className="relative aspect-video w-full overflow-hidden rounded-md bg-muted">
+                          <img
+                            src={thumbUrl(v.id)}
+                            alt=""
+                            loading="lazy"
+                            className="h-full w-full object-cover"
+                          />
+                          <span className="absolute bottom-1 left-1 rounded bg-black/80 px-1 text-[10px] text-white">
+                            {fmtDur(progress[v.id]?.pos ?? 0)} / {fmtDur(v.d)}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 line-clamp-1 text-sm font-medium">
+                          {v.t}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Filter chips */}
               <div className="sticky top-14 z-40 border-b bg-background/95 backdrop-blur">
                 <div className="flex items-center gap-2 overflow-x-auto px-4 py-2">
@@ -667,42 +872,76 @@ export function TubeApp() {
                   <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                     {filtered.slice(0, visible).map((v) => {
                       const ch: Chan | undefined = channels[v.c];
+                      const pr = progressRatio(progress[v.id]);
+                      const isSaved = saved.some((b) => b.id === v.id);
                       return (
-                        <button
-                          key={v.id}
-                          onClick={() => openFromGrid(v, filtered)}
-                          className="group text-left"
-                        >
-                          <div className="relative aspect-video overflow-hidden rounded-xl bg-muted">
-                            <img
-                              src={thumbUrl(v.id)}
-                              alt={v.t}
-                              loading="lazy"
-                              className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                            />
-                            {fmtDur(v.d) && (
-                              <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 text-xs font-medium text-white">
-                                {fmtDur(v.d)}
+                        <div key={v.id} className="group relative text-left">
+                          <button
+                            onClick={() => openFromGrid(v, filtered)}
+                            className="block w-full text-left"
+                          >
+                            <div className="relative aspect-video overflow-hidden rounded-xl bg-muted">
+                              <img
+                                src={thumbUrl(v.id)}
+                                alt={v.t}
+                                loading="lazy"
+                                className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                              />
+                              {fmtDur(v.d) && (
+                                <span className="absolute bottom-1.5 right-1.5 rounded bg-black/80 px-1.5 py-0.5 text-xs font-medium text-white">
+                                  {fmtDur(v.d)}
+                                </span>
+                              )}
+                              <span
+                                className="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-black"
+                                style={{
+                                  backgroundColor: TIER_COLORS[(ch?.tier ?? "D") as Tier],
+                                }}
+                              >
+                                {ch?.tier}
                               </span>
+                              {pr > 0 && (
+                                <span className="absolute inset-x-0 bottom-0 h-1 bg-black/40">
+                                  <span
+                                    className="block h-full bg-[#e5484d]"
+                                    style={{ width: `${Math.round(pr * 100)}%` }}
+                                  />
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-2 px-0.5">
+                              <div className="line-clamp-2 text-sm font-medium leading-snug">
+                                {v.t}
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {metaJoin(chanName(v, channels), fmtViews(v.v), fmtAge(v.ts))}
+                              </div>
+                            </div>
+                          </button>
+                          {/* Bookmark toggle — sibling of the open button so
+                              buttons are never nested. Hover-revealed on
+                              desktop, always visible on touch screens. */}
+                          <button
+                            onClick={() => toggleSaved(v)}
+                            aria-label={
+                              isSaved
+                                ? `Remove ${v.t} from saved`
+                                : `Save ${v.t} for later`
+                            }
+                            aria-pressed={isSaved}
+                            className={`absolute right-1.5 top-1.5 z-10 rounded-lg p-1.5 transition ${
+                              isSaved
+                                ? "bg-black/80 text-[#ff7a7a]"
+                                : "bg-black/60 text-white opacity-100 hover:bg-black/80 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+                            }`}
+                          >
+                            {isSaved ? (
+                              <BookmarkCheck className="h-4 w-4" />
+                            ) : (
+                              <Bookmark className="h-4 w-4" />
                             )}
-                            <span
-                              className="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-black"
-                              style={{
-                                backgroundColor: TIER_COLORS[(ch?.tier ?? "D") as Tier],
-                              }}
-                            >
-                              {ch?.tier}
-                            </span>
-                          </div>
-                          <div className="mt-2 px-0.5">
-                            <div className="line-clamp-2 text-sm font-medium leading-snug">
-                              {v.t}
-                            </div>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              {metaJoin(chanName(v, channels), fmtViews(v.v), fmtAge(v.ts))}
-                            </div>
-                          </div>
-                        </button>
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
