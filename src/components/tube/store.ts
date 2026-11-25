@@ -1,15 +1,18 @@
-import type { BookmarkEntry, ProgressEntry } from "./types";
+import type { BookmarkEntry, HistEntry, ProgressEntry } from "./types";
 
 /**
- * Local persistence for saved videos (bookmarks) and watch progress.
+ * Local persistence for saved videos (bookmarks), watch progress, history
+ * and prefs.
  *
  * Everything lives in localStorage — no accounts, no server round-trips,
- * nothing leaves the browser. Keys follow the existing conventions
- * ("mytube.hist", "chadtube.pk") so one origin keeps one coherent profile.
+ * nothing leaves the browser. All keys share one "chadtube.*" namespace;
+ * legacy "mytube.*" keys are migrated once on boot.
  */
 
 const SAVED_KEY = "chadtube.saved";
 const PROGRESS_KEY = "chadtube.progress";
+const HIST_KEY = "chadtube.hist";
+const AUTOPLAY_KEY = "chadtube.autoplay";
 
 /** Keep the saved list finite so it never bloats the 5 MB localStorage quota. */
 const SAVED_CAP = 1000;
@@ -68,6 +71,56 @@ export function saveProgress(map: Record<string, ProgressEntry>): void {
   saveJSON(PROGRESS_KEY, Object.fromEntries(entries));
 }
 
+const HIST_CAP = 300;
+
+/**
+ * One-time migration: older builds stored history and the autoplay pref
+ * under "mytube.*". Copy them into the chadtube.* namespace (when the new
+ * key is empty) and drop the legacy entries so the split never returns.
+ */
+export function migrateLegacyStorage(): void {
+  try {
+    const legacyHist = localStorage.getItem("mytube.hist");
+    if (legacyHist && !localStorage.getItem(HIST_KEY)) {
+      localStorage.setItem(HIST_KEY, legacyHist);
+    }
+    localStorage.removeItem("mytube.hist");
+    const legacyAuto = localStorage.getItem("mytube.autoplay");
+    if (legacyAuto && !localStorage.getItem(AUTOPLAY_KEY)) {
+      localStorage.setItem(AUTOPLAY_KEY, legacyAuto);
+    }
+    localStorage.removeItem("mytube.autoplay");
+  } catch {
+    /* storage disabled — nothing to migrate */
+  }
+}
+
+/** Watch history, newest first, hard-capped. */
+export function loadHist(): HistEntry[] {
+  const list = loadJSON<HistEntry[]>(HIST_KEY, []);
+  return Array.isArray(list)
+    ? list.filter((e) => e && typeof e.id === "string" && typeof e.ts === "number")
+    : [];
+}
+
+export function saveHist(list: HistEntry[]): void {
+  saveJSON(HIST_KEY, list.slice(0, HIST_CAP));
+}
+
+/** Autoplay pref; null = never set (caller falls back to enabled). */
+export function loadAutoplay(): boolean | null {
+  const v = localStorage.getItem(AUTOPLAY_KEY);
+  return v === null ? null : v === "1";
+}
+
+export function saveAutoplay(on: boolean): void {
+  try {
+    localStorage.setItem(AUTOPLAY_KEY, on ? "1" : "0");
+  } catch {
+    /* quota exceeded or storage disabled — degrade silently */
+  }
+}
+
 const RESUME_BACKOFF = 5; // re-enter a few seconds before where you stopped
 const RESUME_MIN_POS = 5; // < 5s in: not worth resuming, just start over
 const FINISHED_RATIO = 0.95; // past 95%: treat as watched, start over
@@ -90,4 +143,13 @@ export function progressRatio(e?: ProgressEntry): number {
 /** A video counts as "continue watching" when it sits in the resume window. */
 export function isResumable(e?: ProgressEntry): boolean {
   return progressRatio(e) > 0;
+}
+
+/**
+ * True when the user has already engaged with a video — it has a recorded
+ * position or appears in watch history. Powers the "Unwatched" filter.
+ */
+export function isWatched(id: string, progress: Record<string, ProgressEntry>, histIds: Set<string>): boolean {
+  const e = progress[id];
+  return (!!e && e.pos > 0) || histIds.has(id);
 }

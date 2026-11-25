@@ -28,6 +28,9 @@ export interface TubeData {
 
 export type Tier = "S" | "A" | "B" | "C" | "D" | "R" | "★";
 
+/** Tier filter state: a single tier, "curated" (S+A), or everything. */
+export type TierFilter = "all" | "curated" | Tier;
+
 export type SortMode = "newest" | "curated" | "views" | "longest" | "shuffle";
 
 export interface HistEntry {

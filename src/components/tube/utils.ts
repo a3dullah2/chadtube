@@ -26,7 +26,12 @@ export function chanName(v: { up?: string; c: number }, channels: { n: string }[
   return v.up || channels[v.c]?.n || "";
 }
 
-export function thumbUrl(id: string, big = false): string {
+/**
+ * YouTube thumbnail. hqdefault (480×360) is the smallest variant sharp
+ * enough for card widths (~373 CSS px, 2× on retina); the 4:3 letterbox
+ * bars are cropped away by the cards' aspect-video + object-cover.
+ */
+export function thumbUrl(id: string, big = true): string {
   return `https://i.ytimg.com/vi/${id}/${big ? "hqdefault" : "mqdefault"}.jpg`;
 }
 

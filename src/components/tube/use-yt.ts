@@ -70,11 +70,13 @@ export function useYTPlayer(opts: PlayerOpts) {
         width: "100%",
         height: "100%",
         videoId: cbRef.current.videoId,
-        // Standard embed defaults: YouTube renders its own native controls
-        // (controls defaults to 1). No chrome-suppressing params.
+        // Privacy-enhanced embed: videos are served from
+        // youtube-nocookie.com so YouTube sets no tracking cookies for
+        // viewers who never interact with the player — matches the site's
+        // no-tracking ethos. Standard native controls otherwise.
+        host: "https://www.youtube-nocookie.com",
         playerVars: {
           autoplay: cbRef.current.autoplay ? 1 : 0,
-          rel: 0,
           playsinline: 1,
           ...(cbRef.current.start
             ? { start: Math.floor(cbRef.current.start) }
