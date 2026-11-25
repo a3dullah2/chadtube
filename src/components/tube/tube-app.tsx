@@ -96,7 +96,8 @@ function parseUrl(search: string): UrlParams {
   const c = sp.get("c");
   if (c) p.c = c;
   const tier = sp.get("tier");
-  if (tier === "all" || tier === "curated" || (TIERS as string[]).includes(tier)) p.tier = tier;
+  if (tier && (tier === "all" || tier === "curated" || (TIERS as string[]).includes(tier)))
+    p.tier = tier;
   if (sp.get("uw") === "1") p.uw = "1";
   const s = sp.get("s");
   if (s && ["newest", "curated", "views", "longest", "shuffle"].includes(s)) p.s = s;
