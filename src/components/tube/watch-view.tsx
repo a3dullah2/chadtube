@@ -57,6 +57,7 @@ export function WatchView({
   // make the Next button replay itself and autoplay loop it forever.
   const next =
     queue.length > 1 ? (queue[(idx + 1) % queue.length] ?? null) : null;
+  const prev = idx > 0 ? (queue[idx - 1] ?? null) : null;
   const chan = channels[video.c];
   const upNext = idx >= 0 ? queue.slice(idx + 1, idx + 26) : queue.slice(0, 25);
   const endRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,6 +131,37 @@ export function WatchView({
     clearEnd();
   }, [video.id]);
 
+  // TV-style keyboard: Escape leaves the player, ←/→ walk the queue, t flips
+  // theater. Ignored while typing in an input and when modifiers are held;
+  // keys pressed inside the YouTube iframe never reach this handler (its
+  // document consumes them), which keeps YouTube's own shortcuts working.
+  const keysRef = useRef({ next, prev, theater, onBack, onSelect, onTheaterChange });
+  useEffect(() => {
+    keysRef.current = { next, prev, theater, onBack, onSelect, onTheaterChange };
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const k = keysRef.current;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        k.onBack();
+      } else if (e.key === "ArrowRight" && k.next) {
+        e.preventDefault();
+        k.onSelect(k.next);
+      } else if (e.key === "ArrowLeft" && k.prev) {
+        e.preventDefault();
+        k.onSelect(k.prev);
+      } else if (e.key === "t" || e.key === "T") {
+        k.onTheaterChange(!k.theater);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(
     () => () => {
       if (endRef.current) clearTimeout(endRef.current);
@@ -143,7 +175,7 @@ export function WatchView({
         <Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
           <ArrowLeft className="h-4 w-4" /> Back
         </Button>
-        {idx >= 0 && (
+        {idx >= 0 && queue.length <= 200 && (
           <span className="text-sm text-muted-foreground">
             {idx + 1} / {queue.length} in queue
           </span>
@@ -231,15 +263,19 @@ export function WatchView({
               <span className="font-medium text-foreground">
                 {video.up || chan?.n}
               </span>
-              <Badge
-                style={{
-                  backgroundColor: TIER_COLORS[(chan?.tier ?? "D") as Tier],
-                  color: "#111",
-                }}
-                className="border-0"
-              >
-                {chan?.tier} tier
-              </Badge>
+              {/* S/A/B/C/D earn their letter badge; tier R is the undifferentiated
+                  rest and reads as noise here — skip it. */}
+              {chan?.tier && chan.tier !== "R" && (
+                <Badge
+                  style={{
+                    backgroundColor: TIER_COLORS[(chan?.tier ?? "D") as Tier],
+                    color: "#111",
+                  }}
+                  className="border-0"
+                >
+                  {chan?.tier} tier
+                </Badge>
+              )}
               {fmtViews(video.v) && <span>{fmtViews(video.v)}</span>}
               {fmtAge(video.ts) && <span>{fmtAge(video.ts)}</span>}
               {fmtDur(video.d) && <span>{fmtDur(video.d)}</span>}

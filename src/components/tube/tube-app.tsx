@@ -1,15 +1,17 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   BookmarkCheck,
   Clock,
   Dices,
+  EyeOff,
   History,
   Home,
   Menu,
   Moon,
+  RotateCcw,
   Search,
   Sun,
   X,
@@ -31,10 +33,15 @@ import { useToast } from "@/hooks/use-toast";
 import { WatchView } from "./watch-view";
 import {
   isResumable,
+  loadAutoplay,
+  loadHist,
   loadProgress,
   loadSaved,
+  migrateLegacyStorage,
   progressRatio,
   resumeStart,
+  saveAutoplay,
+  saveHist,
   saveProgress,
   saveSaved,
 } from "./store";
@@ -45,6 +52,7 @@ import type {
   ProgressEntry,
   SortMode,
   Tier,
+  TierFilter,
   TubeData,
   Vid,
 } from "./types";
@@ -67,17 +75,53 @@ const PAGE = 40;
 
 type View = "home" | "watch" | "history" | "saved";
 
+/** Query-string shape for shareable links + working browser Back. */
+interface UrlParams {
+  v?: string;
+  view?: string;
+  c?: string;
+  tier?: string;
+  uw?: string;
+  s?: string;
+  q?: string;
+}
+
+function parseUrl(search: string): UrlParams {
+  const sp = new URLSearchParams(search);
+  const p: UrlParams = {};
+  const v = sp.get("v");
+  if (v) p.v = v;
+  const view = sp.get("view");
+  if (view === "history" || view === "saved") p.view = view;
+  const c = sp.get("c");
+  if (c) p.c = c;
+  const tier = sp.get("tier");
+  if (tier === "all" || tier === "curated" || (TIERS as string[]).includes(tier)) p.tier = tier;
+  if (sp.get("uw") === "1") p.uw = "1";
+  const s = sp.get("s");
+  if (s && ["newest", "curated", "views", "longest", "shuffle"].includes(s)) p.s = s;
+  const q = sp.get("q");
+  if (q) p.q = q;
+  return p;
+}
+
 export function TubeApp() {
   const [data, setData] = useState<TubeData | null>(null);
   const [loadError, setLoadError] = useState(false);
+  /** Bumped by the Retry button to re-run the library fetch. */
+  const [reloadTick, setReloadTick] = useState(0);
   const [view, setView] = useState<View>("home");
   const [current, setCurrent] = useState<Vid | null>(null);
   const [queue, setQueue] = useState<Vid[]>([]);
   const [q, setQ] = useState("");
   // Heavy filtering/sorting over 30k videos is deferred so typing stays snappy.
   const dq = useDeferredValue(q);
-  const [tier, setTier] = useState<"all" | Tier>("all");
+  // Default landing is the curated core (S & A tiers) — 264 of 333 channels
+  // are tier R, so "everything" made the first screen a firehose wall.
+  const [tier, setTier] = useState<TierFilter>("curated");
   const [chan, setChan] = useState<number | null>(null);
+  // "What haven't I seen" — hides videos with recorded progress or history.
+  const [unwatchedOnly, setUnwatchedOnly] = useState(false);
   const [sort, setSort] = useState<SortMode>("newest");
   const [seed, setSeed] = useState(1);
   // Pakistani mode: hide Pakistani news & Islamic channels (Dunya News, the
@@ -99,17 +143,17 @@ export function TubeApp() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
 
-  // Data + persisted prefs (async: never setState synchronously inside the effect)
+  // Persisted prefs + persisted state (async: never setState synchronously inside the effect)
   useEffect(() => {
     let alive = true;
     (async () => {
       await Promise.resolve();
       if (!alive) return;
       try {
-        const h = localStorage.getItem("mytube.hist");
-        if (h) setHist(JSON.parse(h));
-        const a = localStorage.getItem("mytube.autoplay");
-        if (a !== null) setAutoplay(a === "1");
+        migrateLegacyStorage();
+        setHist(loadHist());
+        const a = loadAutoplay();
+        if (a !== null) setAutoplay(a);
         if (localStorage.getItem("chadtube.pk") === "1") setPkMode(true);
         if (localStorage.getItem("chadtube.theater") === "1") setTheater(true);
         setSaved(loadSaved());
@@ -119,17 +163,30 @@ export function TubeApp() {
       }
       setMounted(true);
       setHydrated(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Library fetch. The inline bootstrap script in layout.tsx starts this
+  // request while the HTML is still parsing; by the time we hydrate it's in
+  // flight. Bumping reloadTick re-fetches (Retry button) — a fresh URL each
+  // time so a failed/absent edge cache entry can't serve the same error.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      await Promise.resolve();
+      if (!alive) return;
       try {
-        // The inline bootstrap script in layout.tsx starts this request while
-        // the HTML is still parsing; by the time we hydrate it's in flight.
         const boot = (
           window as typeof window & { __chadtubeData?: Promise<TubeData> }
         ).__chadtubeData;
         let d: TubeData;
-        if (boot) {
+        if (boot && reloadTick === 0) {
           d = await boot;
         } else {
-          const r = await fetch("/api/videos?v=2");
+          const r = await fetch(`/api/videos?v=3${reloadTick ? `&retry=${reloadTick}` : ""}`);
           if (!r.ok) throw new Error("bad response");
           d = (await r.json()) as TubeData;
         }
@@ -141,27 +198,19 @@ export function TubeApp() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [reloadTick]);
 
   const pushHist = useCallback((id: string) => {
     setHist((prev) => {
       const next = [{ id, ts: Date.now() }, ...prev.filter((h) => h.id !== id)].slice(0, 300);
-      try {
-        localStorage.setItem("mytube.hist", JSON.stringify(next));
-      } catch {
-        /* noop */
-      }
+      saveHist(next);
       return next;
     });
   }, []);
 
   const clearHist = useCallback(() => {
     setHist([]);
-    try {
-      localStorage.removeItem("mytube.hist");
-    } catch {
-      /* noop */
-    }
+    saveHist([]);
     toast({ title: "Watch history cleared" });
   }, [toast]);
 
@@ -205,11 +254,7 @@ export function TubeApp() {
 
   const changeAutoplay = useCallback((v: boolean) => {
     setAutoplay(v);
-    try {
-      localStorage.setItem("mytube.autoplay", v ? "1" : "0");
-    } catch {
-      /* noop */
-    }
+    saveAutoplay(v);
   }, []);
 
   const changeTheater = useCallback((v: boolean) => {
@@ -223,13 +268,159 @@ export function TubeApp() {
 
   const channels = data?.channels ?? [];
 
+  /**
+   * Watch queue with TV-style weighting: the clicked video first, then its
+   * own channel's videos (playlist rows grouped by real uploader), then the
+   * rest of its tier, then everything else in browse order. "Next" and the
+   * Up next rail become meaningful instead of stepping through the raw feed.
+   */
+  const buildQueue = useCallback(
+    (v: Vid, list: Vid[]): Vid[] => {
+      if (list.length <= 1) return list;
+      const keyOf = (x: Vid) => x.up || String(x.c);
+      const tierOf = (x: Vid) => channels[x.c]?.tier;
+      const vk = keyOf(v);
+      const vt = tierOf(v);
+      const sameChan: Vid[] = [];
+      const sameTier: Vid[] = [];
+      const rest: Vid[] = [];
+      for (const x of list) {
+        if (x.id === v.id) continue;
+        if (keyOf(x) === vk) sameChan.push(x);
+        else if (tierOf(x) === vt) sameTier.push(x);
+        else rest.push(x);
+      }
+      return [v, ...sameChan, ...sameTier, ...rest];
+    },
+    [channels]
+  );
+
+  // ---- URL state sync ---------------------------------------------------
+  // View, filters and the current video live in the query string: videos are
+  // shareable (/ ?v=<id>), refresh keeps your place, and browser Back walks
+  // back out of the player instead of out of the site. Navigation changes
+  // (open video, switch view) push a history entry; filter edits replace, so
+  // typing in search doesn't spam history.
+
+  const pendingUrlRef = useRef<UrlParams | null>(null);
+  const suppressUrlRef = useRef(true);
+  const prevNavRef = useRef<{ view: View; id: string | null }>({ view: "home", id: null });
+
+  const applyUrl = useCallback(
+    (p: UrlParams, recordHist: boolean) => {
+      suppressUrlRef.current = true;
+      setTier(p.tier ? (p.tier as TierFilter) : "curated");
+      setSort(p.s ? (p.s as SortMode) : "newest");
+      setUnwatchedOnly(p.uw === "1");
+      setQ(p.q ?? "");
+      setView(
+        p.view === "history" || p.view === "saved"
+          ? (p.view as View)
+          : p.v
+            ? "watch"
+            : "home"
+      );
+      if (!data) {
+        // v / c need the library to resolve; re-apply once it lands.
+        if (p.v || p.c) pendingUrlRef.current = p;
+        return;
+      }
+      pendingUrlRef.current = null;
+      const idx = p.c ? channels.findIndex((x) => x.cid === p.c) : -1;
+      setChan(p.c && idx >= 0 ? idx : null);
+      if (p.v) {
+        const vid = data.videos.find((x) => x.id === p.v);
+        if (vid) {
+          setCurrent(vid);
+          setQueue(buildQueue(vid, data.videos));
+          if (recordHist) pushHist(vid.id);
+        } else {
+          setCurrent(null); // unknown id -> back to the grid
+        }
+      } else {
+        setCurrent(null);
+      }
+    },
+    [data, channels, buildQueue, pushHist]
+  );
+
+  const applyUrlRef = useRef(applyUrl);
+  useEffect(() => {
+    applyUrlRef.current = applyUrl;
+  });
+
+  // Restore state from the URL on first paint and on back/forward; the
+  // initial restore must not write a history entry (suppress flag starts on).
+  useEffect(() => {
+    const apply = () => applyUrlRef.current(parseUrl(window.location.search), false);
+    apply();
+    const onPop = () => applyUrlRef.current(parseUrl(window.location.search), false);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // A deep link (?v=…) can only resolve once the library has loaded.
+  useEffect(() => {
+    if (data && pendingUrlRef.current) {
+      const p = pendingUrlRef.current;
+      pendingUrlRef.current = null;
+      applyUrlRef.current(p, true);
+    }
+  }, [data]);
+
+  // State -> URL: push on navigation, replace on filter tweaks.
+  useEffect(() => {
+    if (!mounted) return;
+    const sp = new URLSearchParams();
+    if (current?.id) sp.set("v", current.id);
+    if (view === "history" || view === "saved") sp.set("view", view);
+    if (chan !== null) {
+      const cid = channels[chan]?.cid;
+      if (cid) sp.set("c", cid);
+    }
+    if (tier !== "curated") sp.set("tier", tier);
+    if (unwatchedOnly) sp.set("uw", "1");
+    if (sort !== "newest") sp.set("s", sort);
+    if (dq.trim()) sp.set("q", dq.trim());
+    const qs = sp.toString();
+    const target = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+    // Push only when entering the player or hopping between videos — that's
+    // what Back should reverse. Leaving watch (Escape/Back button), view
+    // switches and filter tweaks replace the current entry instead, so Back
+    // never lands on a stale duplicate of where you already are.
+    const navChanged =
+      view === "watch" &&
+      (prevNavRef.current.view !== view || prevNavRef.current.id !== (current?.id ?? null));
+    prevNavRef.current = { view, id: current?.id ?? null };
+    if (suppressUrlRef.current) {
+      suppressUrlRef.current = false;
+      history.replaceState(null, "", target);
+      return;
+    }
+    if (navChanged) history.pushState(null, "", target);
+    else history.replaceState(null, "", target);
+  }, [mounted, view, current?.id, chan, tier, unwatchedOnly, sort, dq, channels]);
+
+  // Videos the user has already engaged with (progress or history) — powers
+  // the Unwatched filter.
+  const watchedIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const [id, e] of Object.entries(progress)) if (e && e.pos > 0) s.add(id);
+    for (const h of hist) s.add(h.id);
+    return s;
+  }, [progress, hist]);
+
   const filtered = useMemo(() => {
     if (!data) return [];
     const ql = dq.trim().toLowerCase();
     let out = data.videos.filter((v) => {
-      if (tier !== "all" && (data.channels[v.c]?.tier as Tier) !== tier) return false;
+      if (tier !== "all") {
+        const t = (data.channels[v.c]?.tier as Tier | undefined) ?? "R";
+        if (tier === "curated" ? t !== "S" && t !== "A" : t !== tier) return false;
+      }
       if (chan !== null && v.c !== chan) return false;
       if (pkMode && (data.channels[v.c]?.pk || v.pk)) return false;
+      if (unwatchedOnly && watchedIds.has(v.id)) return false;
       if (ql) {
         const t = v.t.toLowerCase();
         const c = `${data.channels[v.c]?.n ?? ""} ${v.up ?? ""}`.toLowerCase();
@@ -252,7 +443,7 @@ export function TubeApp() {
     else if (sort === "longest") out = [...out].sort((a, b) => b.d - a.d);
     else if (sort === "shuffle") out = shuffleSeeded(out, seed);
     return out;
-  }, [data, dq, tier, chan, sort, seed, pkMode]);
+  }, [data, dq, tier, chan, sort, seed, pkMode, unwatchedOnly, watchedIds]);
 
   const applyFilter = useCallback(() => {
     setVisible(PAGE);
@@ -262,13 +453,13 @@ export function TubeApp() {
 
   const openFromGrid = useCallback(
     (v: Vid, list: Vid[]) => {
-      setQueue(list);
+      setQueue(buildQueue(v, list));
       setCurrent(v);
       setView("watch");
       pushHist(v.id);
       window.scrollTo({ top: 0 });
     },
-    [pushHist]
+    [buildQueue, pushHist]
   );
 
   const openInQueue = useCallback(
@@ -307,10 +498,57 @@ export function TubeApp() {
     });
   }, [filtered.length, toast]);
 
+  // Infinite scroll: reveal more when the sentinel approaches the viewport.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const canLoadMore = !!data && visible < filtered.length;
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || !canLoadMore || view !== "home") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible((n) => Math.min(n + PAGE * 4, filtered.length));
+        }
+      },
+      { rootMargin: "900px 0px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [canLoadMore, view, filtered.length]);
+
+  // Reactive subtitle: says what's actually on screen, not the same static
+  // line for every filter/sort combination.
+  const scopeText = useMemo(() => {
+    if (chan !== null) {
+      const c = channels[chan];
+      return c ? `from ${c.n} (${c.tier} tier)` : "";
+    }
+    if (tier === "curated") return "across S & A channels — the curated core, zero algorithm";
+    if (tier === "all") return "across the whole line-up, zero algorithm";
+    return `${TIER_LABELS[tier]} — ${tier}-tier channels`;
+  }, [chan, tier, channels]);
+  const sortText =
+    sort === "shuffle"
+      ? " · freshly shuffled"
+      : sort === "views"
+        ? " · most viewed first"
+        : sort === "longest"
+          ? " · longest first"
+          : sort === "curated"
+            ? " · in channel order"
+            : "";
+
   const goHome = useCallback(() => {
     setView("home");
     setDrawer(false);
   }, []);
+
+  // Leaving the watch view drops the current video, so the URL stops
+  // carrying ?v= once you're back on a grid — reloading a grid URL stays a
+  // grid instead of dropping you back into the last-played video.
+  useEffect(() => {
+    if (view !== "watch") setCurrent(null);
+  }, [view]);
 
   const toggleTheme = useCallback(() => {
     setTheme(theme === "dark" ? "light" : "dark");
@@ -371,7 +609,7 @@ export function TubeApp() {
     <div className="flex h-full flex-col">
       <div className="p-3">
         {navItem(<Home className="h-4 w-4" />, "Home", view === "home", () => {
-          setTier("all");
+          setTier("curated");
           setChan(null);
           applyFilter();
           goHome();
@@ -445,6 +683,10 @@ export function TubeApp() {
               );
             })}
           </>
+        ) : loadError ? (
+          <p className="p-3 text-sm text-muted-foreground">
+            Library unavailable — use Retry in the grid once it loads.
+          </p>
         ) : (
           <div className="space-y-2 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -456,7 +698,14 @@ export function TubeApp() {
     </div>
   );
 
-  const chip = (t: "all" | Tier) => {
+  const chipCls = (active: boolean) =>
+    `flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+      active
+        ? "border-transparent bg-foreground text-background"
+        : "bg-secondary text-secondary-foreground hover:bg-accent"
+    }`;
+
+  const chip = (t: "all" | "curated" | Tier) => {
     const active = tier === t;
     return (
       <button
@@ -465,26 +714,57 @@ export function TubeApp() {
           setTier(t);
           applyFilter();
         }}
-        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-          active
-            ? "border-transparent bg-foreground text-background"
-            : "bg-secondary text-secondary-foreground hover:bg-accent"
-        }`}
+        className={chipCls(active)}
         aria-pressed={active}
+        title={t === "curated" ? "Only the S & A channels" : undefined}
       >
-        {t !== "all" && (
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: TIER_COLORS[t] }}
-          />
+        {t === "curated" ? (
+          <>
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: TIER_COLORS.S }}
+            />
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: TIER_COLORS.A }}
+            />
+          </>
+        ) : (
+          t !== "all" && (
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ backgroundColor: TIER_COLORS[t] }}
+            />
+          )
         )}
-        {t === "all" ? "All" : t}
+        {t === "all" ? "All" : t === "curated" ? "Curated" : t}
       </button>
     );
   };
 
+  const uwChip = () => (
+    <button
+      onClick={() => {
+        setUnwatchedOnly(!unwatchedOnly);
+        applyFilter();
+      }}
+      className={chipCls(unwatchedOnly)}
+      aria-pressed={unwatchedOnly}
+      title="Hide videos you already watched or have in history"
+    >
+      <EyeOff className="h-3.5 w-3.5" />
+      Unwatched
+    </button>
+  );
+
   return (
     <div className="flex min-h-screen flex-col">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:rounded-md focus:bg-foreground focus:px-3 focus:py-2 focus:text-sm focus:text-background"
+      >
+        Skip to content
+      </a>
       {/* Header */}
       <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="flex h-14 items-center gap-2 px-3 sm:px-4">
@@ -497,21 +777,23 @@ export function TubeApp() {
           >
             <Menu className="h-5 w-5" />
           </Button>
-          <button
-            className="flex items-center gap-2"
-            onClick={goHome}
-            aria-label="ChadTube home"
-          >
-            <img
-              src="/chad.png"
-              alt="ChadTube logo"
-              width={36}
-              height={36}
-              draggable={false}
-              className="chad-logo h-9 w-auto select-none"
-            />
-            <span className="text-lg font-bold tracking-tight">ChadTube</span>
-          </button>
+          <h1 className="m-0 flex items-center">
+            <button
+              className="flex items-center gap-2 text-lg font-bold tracking-tight"
+              onClick={goHome}
+              aria-label="ChadTube home"
+            >
+              <img
+                src="/chad.png"
+                alt="ChadTube logo"
+                width={36}
+                height={36}
+                draggable={false}
+                className="chad-logo h-9 w-auto select-none"
+              />
+              <span className="tracking-tight">ChadTube</span>
+            </button>
+          </h1>
           <div className="relative mx-auto hidden max-w-xl flex-1 sm:block">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -534,15 +816,6 @@ export function TubeApp() {
               aria-label="Shuffle everything"
             >
               <Dices className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="hidden sm:inline-flex"
-              onClick={() => setView("saved")}
-              aria-label="Saved videos"
-            >
-              <Bookmark className="h-5 w-5" />
             </Button>
             <Button
               variant="ghost"
@@ -617,12 +890,23 @@ export function TubeApp() {
               aria-hidden="true"
             />
             <div className="absolute inset-y-0 left-0 w-72 border-r bg-background">
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <span className="text-sm font-semibold">Browse</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setDrawer(false)}
+                  aria-label="Close menu"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
               {sidebarContent(() => setDrawer(false))}
             </div>
           </div>
         )}
 
-        <main className="min-w-0 flex-1">
+        <main id="main" className="min-w-0 flex-1">
           {view === "watch" && current && data ? (
             <WatchView
               /* key: a brand-new iframe per video. Reusing one iframe across
@@ -788,11 +1072,14 @@ export function TubeApp() {
                 </div>
               )}
 
-              {/* Filter chips */}
+              {/* Filter chips — wraps on small screens instead of scrolling
+                  the sort control off the viewport. */}
               <div className="sticky top-14 z-40 border-b bg-background/95 backdrop-blur">
-                <div className="flex items-center gap-2 overflow-x-auto px-4 py-2">
+                <div className="flex flex-wrap items-center gap-2 px-4 py-2">
                   {chip("all")}
+                  {chip("curated")}
                   {TIERS.map((t) => chip(t))}
+                  {uwChip()}
                   {chan !== null && (
                     <Badge
                       variant="outline"
@@ -807,7 +1094,7 @@ export function TubeApp() {
                       </button>
                     </Badge>
                   )}
-                  <div className="ml-auto shrink-0 pl-2">
+                  <div className="ml-auto w-full sm:w-auto sm:pl-2">
                     <Select value={sort} onValueChange={(v) => { setSort(v as SortMode); applyFilter(); }}>
                       <SelectTrigger
                         size="sm"
@@ -835,16 +1122,16 @@ export function TubeApp() {
                     <span className="font-medium text-foreground">
                       {filtered.length.toLocaleString()} videos
                     </span>
-                    {" · "}
-                    {channels.length} channels · newest uploads across the whole
-                    line-up, zero algorithm
+                    {scopeText && [
+                      " · ",
+                      <span key="scope">{scopeText}</span>,
+                    ]}
+                    {sortText}
                     {pkMode && " · 🇵🇰 Pakistani mode: Pakistani channels hidden"}
                     {q.trim() && <> · results for “{q.trim()}”</>}
                   </>
-                ) : loadError ? (
-                  "Couldn’t load the video library."
                 ) : (
-                  "Loading library…"
+                  !loadError && "Loading library…"
                 )}
               </div>
 
@@ -860,8 +1147,21 @@ export function TubeApp() {
                   ))}
                 </div>
               ) : loadError && !data ? (
-                <div className="p-16 text-center text-muted-foreground">
-                  Failed to load videos. Try refreshing the page.
+                <div className="p-16 text-center">
+                  <p className="text-muted-foreground">
+                    Couldn’t load the video library. Check your connection and try again.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-4 gap-2"
+                    onClick={() => {
+                      setLoadError(false);
+                      setReloadTick((t) => t + 1);
+                    }}
+                  >
+                    <RotateCcw className="h-4 w-4" /> Retry
+                  </Button>
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="p-16 text-center text-muted-foreground">
@@ -946,14 +1246,7 @@ export function TubeApp() {
                     })}
                   </div>
                   {visible < filtered.length && (
-                    <div className="pb-6 text-center">
-                      <Button
-                        variant="outline"
-                        onClick={() => setVisible((n) => n + PAGE * 2)}
-                      >
-                        Load more ({(filtered.length - visible).toLocaleString()} remaining)
-                      </Button>
-                    </div>
+                    <div ref={loadMoreRef} className="h-8" aria-hidden="true" />
                   )}
                 </>
               )}
