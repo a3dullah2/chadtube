@@ -35,6 +35,8 @@ export function loadYTApi(): Promise<any> {
 export interface PlayerOpts {
   videoId: string;
   autoplay?: boolean;
+  /** Resume position in seconds (mapped to the standard `start` playerVar). */
+  start?: number;
   onEnd?: () => void;
   onState?: (state: number) => void;
 }
@@ -74,6 +76,9 @@ export function useYTPlayer(opts: PlayerOpts) {
           autoplay: cbRef.current.autoplay ? 1 : 0,
           rel: 0,
           playsinline: 1,
+          ...(cbRef.current.start
+            ? { start: Math.floor(cbRef.current.start) }
+            : {}),
         },
         events: {
           onStateChange: (e: any) => {
