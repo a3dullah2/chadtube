@@ -24,6 +24,9 @@ export interface Chan {
 export interface TubeData {
   channels: Chan[];
   videos: Vid[];
+  /** Present on the sharded core payload: S & A videos only. The client
+      fetches the full library lazily once anything else needs it. */
+  shard?: "core";
 }
 
 export type Tier = "S" | "A" | "B" | "C" | "D" | "R" | "★";
