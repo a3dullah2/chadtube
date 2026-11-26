@@ -118,7 +118,9 @@ export function TubeApp() {
   // Heavy filtering/sorting over 30k videos is deferred so typing stays snappy.
   const dq = useDeferredValue(q);
   // Default landing is the curated core (S & A tiers) — 264 of 333 channels
-  // are tier R, so "everything" made the first screen a firehose wall.
+  // are tier R, so "everything" made the first screen a firehose wall. The
+  // bootstrap fetch ships exactly this shard (see layout.tsx); the full
+  // library swaps in lazily when a view needs it.
   const [tier, setTier] = useState<TierFilter>("curated");
   const [chan, setChan] = useState<number | null>(null);
   // "What haven't I seen" — hides videos with recorded progress or history.
@@ -187,7 +189,9 @@ export function TubeApp() {
         if (boot && reloadTick === 0) {
           d = await boot;
         } else {
-          const r = await fetch(`/api/videos?v=3${reloadTick ? `&retry=${reloadTick}` : ""}`);
+          const r = await fetch(
+            `/api/videos?v=3&shard=core${reloadTick ? `&retry=${reloadTick}` : ""}`
+          );
           if (!r.ok) throw new Error("bad response");
           d = (await r.json()) as TubeData;
         }
@@ -200,6 +204,44 @@ export function TubeApp() {
       alive = false;
     };
   }, [reloadTick]);
+
+  // The bootstrap payload is the curated-core shard (S & A videos only).
+  // Everything else — non-curated tier filters, a search across the whole
+  // library, an out-of-core deep link, bookmarks/history outside the core —
+  // needs the full ~31k-video library; fetch it once, lazily, and swap it
+  // in. The full payload carries no `shard` marker, so every check below
+  // becomes a no-op afterwards.
+  const fetchFullRef = useRef(false);
+  const fetchFull = useCallback(() => {
+    if (fetchFullRef.current) return;
+    fetchFullRef.current = true;
+    fetch("/api/videos?v=3")
+      .then((r) => {
+        if (!r.ok) throw new Error("bad response");
+        return r.json() as Promise<TubeData>;
+      })
+      .then((d) => setData(d))
+      .catch(() => {
+        /* keep the shard; a later trigger retries */
+      })
+      .finally(() => {
+        fetchFullRef.current = false;
+      });
+  }, []);
+
+  const needsFullLibrary = useMemo(
+    () =>
+      !!data?.shard &&
+      (tier === "all" ||
+        (tier !== "curated" && tier !== "S" && tier !== "A") ||
+        (chan !== null && !["S", "A"].includes(data?.channels[chan]?.tier ?? "")) ||
+        !!dq.trim()),
+    [data, tier, chan, dq]
+  );
+
+  useEffect(() => {
+    if (needsFullLibrary) fetchFull();
+  }, [needsFullLibrary, fetchFull]);
 
   const pushHist = useCallback((id: string) => {
     setHist((prev) => {
@@ -321,9 +363,15 @@ export function TubeApp() {
             ? "watch"
             : "home"
       );
-      if (!data) {
-        // v / c need the library to resolve; re-apply once it lands.
+      if (
+        !data ||
+        (p.v && data.shard === "core" && !data.videos.some((x) => x.id === p.v))
+      ) {
+        // v / c need the library to resolve; re-apply once it lands. A deep
+        // link to a video outside the core shard parks here until the full
+        // library has been fetched.
         if (p.v || p.c) pendingUrlRef.current = p;
+        if (p.v && data) fetchFull();
         return;
       }
       pendingUrlRef.current = null;
@@ -342,7 +390,7 @@ export function TubeApp() {
         setCurrent(null);
       }
     },
-    [data, channels, buildQueue, pushHist]
+    [data, channels, buildQueue, pushHist, fetchFull]
   );
 
   const applyUrlRef = useRef(applyUrl);
@@ -360,14 +408,18 @@ export function TubeApp() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // A deep link (?v=…) can only resolve once the library has loaded.
+  // A deep link (?v=…) can only resolve once the library has loaded — and if
+  // it points outside the core shard, once the full library has loaded.
   useEffect(() => {
-    if (data && pendingUrlRef.current) {
-      const p = pendingUrlRef.current;
-      pendingUrlRef.current = null;
-      applyUrlRef.current(p, true);
+    if (!data || !pendingUrlRef.current) return;
+    const p = pendingUrlRef.current;
+    if (p.v && data.shard === "core" && !data.videos.some((x) => x.id === p.v)) {
+      fetchFull();
+      return;
     }
-  }, [data]);
+    pendingUrlRef.current = null;
+    applyUrlRef.current(p, true);
+  }, [data, fetchFull]);
 
   // State -> URL: push on navigation, replace on filter tweaks.
   useEffect(() => {
@@ -561,6 +613,22 @@ export function TubeApp() {
     [data]
   );
 
+  // Saved / history / progress entries can reference videos outside the
+  // core shard; pull the full library once so Saved, History and the
+  // Continue watching rail never silently drop rows.
+  const missingFromCore = useMemo(() => {
+    if (!data?.shard || !hydrated) return false;
+    return (
+      saved.some((b) => !byId.has(b.id)) ||
+      hist.some((h) => !byId.has(h.id)) ||
+      Object.keys(progress).some((id) => !byId.has(id))
+    );
+  }, [data, hydrated, saved, hist, progress, byId]);
+
+  useEffect(() => {
+    if (missingFromCore) fetchFull();
+  }, [missingFromCore, fetchFull]);
+
   const histVids = useMemo(() => {
     if (!data) return [];
     return hist
@@ -685,9 +753,20 @@ export function TubeApp() {
             })}
           </>
         ) : loadError ? (
-          <p className="p-3 text-sm text-muted-foreground">
-            Library unavailable — use Retry in the grid once it loads.
-          </p>
+          <div className="space-y-2 p-2 text-sm text-muted-foreground">
+            <p>Library unavailable.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full gap-2"
+              onClick={() => {
+                setLoadError(false);
+                setReloadTick((t) => t + 1);
+              }}
+            >
+              <RotateCcw className="h-4 w-4" /> Retry
+            </Button>
+          </div>
         ) : (
           <div className="space-y-2 p-2">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -758,6 +837,11 @@ export function TubeApp() {
     </button>
   );
 
+  // The site logo is the page's h1 only on the grid views that lack their
+  // own one — the watch page's h1 is the video title, history/saved have
+  // theirs. Keeps one h1 per page everywhere.
+  const LogoTag = (view === "home" ? "h1" : "div") as "h1" | "div";
+
   return (
     <div className="flex min-h-screen flex-col">
       <a
@@ -778,7 +862,7 @@ export function TubeApp() {
           >
             <Menu className="h-5 w-5" />
           </Button>
-          <h1 className="m-0 flex items-center">
+          <LogoTag className="m-0 flex items-center">
             <button
               className="flex items-center gap-2 text-lg font-bold tracking-tight"
               onClick={goHome}
@@ -794,7 +878,7 @@ export function TubeApp() {
               />
               <span className="tracking-tight">ChadTube</span>
             </button>
-          </h1>
+          </LogoTag>
           <div className="relative mx-auto hidden max-w-xl flex-1 sm:block">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -1105,7 +1189,7 @@ export function TubeApp() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="newest">Newest (mixed)</SelectItem>
+                        <SelectItem value="newest">Newest first</SelectItem>
                         <SelectItem value="curated">By channel order</SelectItem>
                         <SelectItem value="views">Most viewed</SelectItem>
                         <SelectItem value="longest">Longest</SelectItem>
@@ -1165,9 +1249,17 @@ export function TubeApp() {
                   </Button>
                 </div>
               ) : filtered.length === 0 ? (
-                <div className="p-16 text-center text-muted-foreground">
-                  No videos match. Try clearing the search or filters.
-                </div>
+                needsFullLibrary ? (
+                  // A non-curated filter on the core shard shows nothing
+                  // until the full library has been swapped in.
+                  <div className="p-16 text-center text-muted-foreground">
+                    Loading the full library…
+                  </div>
+                ) : (
+                  <div className="p-16 text-center text-muted-foreground">
+                    No videos match. Try clearing the search or filters.
+                  </div>
+                )
               ) : (
                 <>
                   <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
