@@ -22,16 +22,20 @@ export const metadata: Metadata = {
   description:
     "A personal, algorithm-free video site: curated channels and thousands of videos.",
   keywords: ["ChadTube", "curated", "YouTube", "nerd TV"],
+  alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     siteName: "ChadTube",
+    url: "/",
     title: "ChadTube — your personal nerd TV",
     description:
       "333 curated channels, 30k+ videos, zero algorithm. Bookmarks, watch progress, and a Continue watching rail.",
-    images: [{ url: "/chad.png", width: 256, height: 256 }],
+    // 1200x630 banner rendered by src/app/api/og/route.tsx — per-video pages
+    // override it with the video's real thumbnail in page.tsx.
+    images: [{ url: "/api/og", width: 1200, height: 630, alt: "ChadTube — your personal nerd TV" }],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "ChadTube — your personal nerd TV",
     description:
       "A personal, algorithm-free video site: curated channels and thousands of videos.",
@@ -52,13 +56,15 @@ export default function RootLayout({
           Bootstrap: start the library fetch during HTML parsing, long before
           React hydrates. TubeApp awaits this promise instead of launching a
           fresh request, so the payload downloads in parallel with the
-          JS chunks instead of after them. ?v=3 keys the CDN entry for the
-          deduplicated payload.
+          JS chunks instead of after them. This is the curated-core shard
+          (S & A videos only — the landing page's default filter), a fraction
+          of the full payload; the full library swaps in lazily only when a
+          non-curated view actually needs it. ?v=3 keys the CDN entry.
         */}
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "window.__chadtubeData=fetch('/api/videos?v=3').then(function(r){if(!r.ok)throw new Error('bad response');return r.json()});",
+              "window.__chadtubeData=fetch('/api/videos?v=3&shard=core').then(function(r){if(!r.ok)throw new Error('bad response');return r.json()});",
           }}
         />
         <Providers>{children}</Providers>
